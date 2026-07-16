@@ -18,6 +18,10 @@ pub fn main(init: std.process.Init) !u8 {
     }
 
     if (cli.parse(list.items)) |request| {
+        const home = init.environ_map.get("HOME") orelse return error.MissingHome;
+        const path = try library_path(allocator, home);
+        defer allocator.free(path);
+
         const lib_path = "~/.config/music_hook/music_library.zon";
         try execute(
             init.io,
@@ -54,7 +58,7 @@ pub fn main(init: std.process.Init) !u8 {
 fn execute(
     io: std.Io,
     allocator: std.mem.Allocator,
-    library_path: []const u8,
+    data_path: []const u8,
     request: protocol.Request,
 ) !void {
     switch (request.command) {
@@ -62,7 +66,7 @@ fn execute(
             const library = try music_library.MusicLibrary.load(
                 io,
                 allocator,
-                library_path,
+                data_path,
             );
             defer library.deinit(allocator);
             execute_play(library, request.alias.?);
@@ -95,4 +99,29 @@ fn execute_play(
         );
     }
     return;
+}
+
+fn library_path(
+    allocator: std.mem.Allocator,
+    home: []const u8,
+) std.mem.Allocator.Error![]u8 {
+    return std.fs.path.join(allocator, &.{
+        home,
+        ".config",
+        "music_hook",
+        "music_library.zon",
+    });
+}
+
+test "library_path builds the music library location" {
+    const path = try library_path(
+        std.testing.allocator,
+        "/home/shiori",
+    );
+    defer std.testing.allocator.free(path);
+
+    try std.testing.expectEqualStrings(
+        "/home/shiori/.config/music_hook/music_library.zon",
+        path,
+    );
 }
