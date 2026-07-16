@@ -1,5 +1,7 @@
 const std = @import("std");
 const cli = @import("cli.zig");
+const protocol = @import("protocol.zig");
+const music_library = @import("music_library.zig");
 
 pub fn main(init: std.process.Init) !u8 {
     // A pre-initialised general purpose allocator for temporary heap work
@@ -16,15 +18,13 @@ pub fn main(init: std.process.Init) !u8 {
     }
 
     if (cli.parse(list.items)) |request| {
-        std.debug.print("command: {s}\n", .{
-            @tagName(request.command),
-        });
-
-        if (request.alias) |alias| {
-            std.debug.print("alias: {s}\n", .{
-                alias,
-            });
-        }
+        const lib_path = "~/.config/music_hook/music_library.zon";
+        try execute(
+            init.io,
+            init.gpa,
+            lib_path,
+            request,
+        );
 
         return 0;
     } else |err| {
@@ -49,4 +49,50 @@ pub fn main(init: std.process.Init) !u8 {
         }
         return 1; // return a non-zero exit code
     }
+}
+
+fn execute(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    library_path: []const u8,
+    request: protocol.Request,
+) !void {
+    switch (request.command) {
+        .play => {
+            const library = try music_library.MusicLibrary.load(
+                io,
+                allocator,
+                library_path,
+            );
+            defer library.deinit(allocator);
+            execute_play(library, request.alias.?);
+        },
+        else => stub(),
+    }
+}
+
+fn stub() void {
+    std.debug.print("Stubbed command, doesn't exist yet\n", .{});
+}
+
+fn execute_play(
+    library: music_library.MusicLibrary,
+    alias: []const u8,
+) void {
+    const request_target = library.find(alias);
+    if (request_target) |item| {
+        std.debug.print(
+            "Target found: alias - {s} | title - {s}",
+            .{
+                item.alias,
+                item.title,
+            },
+        );
+    } else {
+        std.debug.print(
+            "Could not find Target with that alias\n",
+            .{},
+        );
+    }
+    return;
 }

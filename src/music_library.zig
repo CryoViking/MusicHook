@@ -34,7 +34,7 @@ pub const MusicLibrary = struct {
             .of(u8),
             0,
         );
-        defer std.testing.allocator.free(contents);
+        defer allocator.free(contents);
 
         const library = try std.zon.parse.fromSliceAlloc(
             MusicLibrary,
@@ -49,7 +49,7 @@ pub const MusicLibrary = struct {
         // - If validation succeeds and you return library, errdefer does not run.
         // Ownership transfers to the caller.
         // - The caller later invokes library.deinit(allocator)
-        errdefer std.zon.parse.free(std.testing.allocator, library);
+        errdefer std.zon.parse.free(allocator, library);
 
         try library.validate();
         return library;
@@ -60,6 +60,18 @@ pub const MusicLibrary = struct {
         allocator: std.mem.Allocator,
     ) void {
         std.zon.parse.free(allocator, self);
+    }
+
+    pub fn find(
+        self: MusicLibrary,
+        alias: []const u8,
+    ) ?*const target.Target {
+        for (self.targets) |*item| {
+            if (std.mem.eql(u8, item.alias, alias)) {
+                return item;
+            }
+        }
+        return null;
     }
 };
 
@@ -163,4 +175,46 @@ test "reads valid library fixture" {
         .playlist,
         library.targets[0].kind,
     );
+}
+
+test "rejects duplicated aliases in a fixture" {
+    try std.testing.expectError(
+        MusicLibraryError.DuplicateAlias,
+        MusicLibrary.load(
+            std.testing.io,
+            std.testing.allocator,
+            "testdata/duplicate-alias.zon",
+        ),
+    );
+    // NOTE: no defer because load returns no library on error;
+    // its errdefer performs cleanup.
+}
+
+test "finds alias in test fixture" {
+    const library = try MusicLibrary.load(
+        std.testing.io,
+        std.testing.allocator,
+        "testdata/valid-library.zon",
+    );
+    defer library.deinit(std.testing.allocator);
+
+    const music_target = library.find("dusk");
+    try std.testing.expect(music_target != null);
+    try std.testing.expectEqualStrings(
+        "Dusk Focus",
+        // NOTE: the .? unwraps the optional `music_target`
+        music_target.?.title,
+    );
+}
+
+test "returns null on non existent alias" {
+    const library = try MusicLibrary.load(
+        std.testing.io,
+        std.testing.allocator,
+        "testdata/valid-library.zon",
+    );
+    defer library.deinit(std.testing.allocator);
+
+    const music_target = library.find("dawn");
+    try std.testing.expect(music_target == null);
 }
