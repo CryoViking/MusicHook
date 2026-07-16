@@ -20,6 +20,47 @@ pub const MusicLibrary = struct {
             }
         }
     }
+
+    pub fn load(
+        io: std.Io,
+        allocator: std.mem.Allocator,
+        path: []const u8,
+    ) !MusicLibrary {
+        const contents = try std.Io.Dir.cwd().readFileAllocOptions(
+            io,
+            path,
+            allocator,
+            .limited(1024 * 1024),
+            .of(u8),
+            0,
+        );
+        defer std.testing.allocator.free(contents);
+
+        const library = try std.zon.parse.fromSliceAlloc(
+            MusicLibrary,
+            allocator,
+            contents,
+            null,
+            .{},
+        );
+        // not ordinary defer because ownership changes on success:
+        // - If parsing success but library.validate() fails, errdefer frees the
+        // partially acquired library before returning that error.
+        // - If validation succeeds and you return library, errdefer does not run.
+        // Ownership transfers to the caller.
+        // - The caller later invokes library.deinit(allocator)
+        errdefer std.zon.parse.free(std.testing.allocator, library);
+
+        try library.validate();
+        return library;
+    }
+
+    pub fn deinit(
+        self: MusicLibrary,
+        allocator: std.mem.Allocator,
+    ) void {
+        std.zon.parse.free(allocator, self);
+    }
 };
 
 test "empty target list is valid" {
@@ -101,5 +142,25 @@ test "target error propagates through" {
     try std.testing.expectError(
         MusicLibraryError.EmptyAlias,
         test_music_lib.validate(),
+    );
+}
+
+test "reads valid library fixture" {
+    const library = try MusicLibrary.load(
+        std.testing.io,
+        std.testing.allocator,
+        "testdata/valid-library.zon",
+    );
+    defer library.deinit(std.testing.allocator);
+
+    try library.validate();
+    try std.testing.expect(library.targets.len == 2);
+    try std.testing.expectEqualStrings(
+        "dusk",
+        library.targets[0].alias,
+    );
+    try std.testing.expectEqual(
+        .playlist,
+        library.targets[0].kind,
     );
 }

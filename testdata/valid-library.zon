@@ -1,0 +1,18 @@
+.{
+    .targets = .{
+        .{
+            .alias = "dusk",
+            .title = "Dusk Focus",
+            .kind = .playlist,
+            .source = .ytmusic,
+            .url = "https://music.youtube.com/playlist?list=...",
+        },
+        .{
+            .alias = "longform",
+            .title = "Long-form Mix",
+            .kind = .track,
+            .source = .youtube,
+            .url = "https://www.youtube.com/watch?v=...",
+        },
+    },
+}
