@@ -2,6 +2,7 @@ const std = @import("std");
 const cli = @import("cli.zig");
 const protocol = @import("protocol.zig");
 const music_library = @import("music_library.zig");
+const config = @import("config.zig");
 
 const PlayTargetKind = union(enum) {
     alias: []const u8,
@@ -25,7 +26,7 @@ pub fn main(init: std.process.Init) !u8 {
 
     if (cli.parse(list.items)) |request| {
         const home = init.environ_map.get("HOME") orelse return error.MissingHome;
-        const path = try library_path(allocator, home);
+        const path = try config_path(allocator, home);
         defer allocator.free(path);
 
         try execute(
@@ -63,10 +64,15 @@ pub fn main(init: std.process.Init) !u8 {
 fn execute(
     io: std.Io,
     allocator: std.mem.Allocator,
-    data_path: []const u8,
+    config_filepath: []const u8,
     request: protocol.Request,
 ) !void {
     switch (request.command) {
+        .init => try execute_init(
+            io,
+            allocator,
+            config_filepath,
+        ),
         .play => {
             const play_target = request.play_target orelse
                 return protocol.ProtocolError.MissingPlayTarget;
@@ -78,10 +84,18 @@ fn execute(
                     execute_play_direct_url(url);
                 },
                 .alias => |alias| {
+                    const cfg = try config.Config.load(
+                        io,
+                        allocator,
+                        std.Io.Dir.cwd(),
+                        config_filepath,
+                    );
+                    defer cfg.deinit(allocator);
                     const library = try music_library.MusicLibrary.load(
                         io,
                         allocator,
-                        data_path,
+                        std.Io.Dir.cwd(),
+                        cfg.data_path,
                     );
                     defer library.deinit(allocator);
                     execute_play_alias(library, alias);
@@ -96,6 +110,79 @@ fn stub() void {
     std.debug.print("Stubbed command, doesn't exist yet\n", .{});
 }
 
+// SECTION: 'init' subcommand
+fn execute_init(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    config_filepath: []const u8,
+) !void {
+    const config_dir = std.fs.path.dirname(config_filepath) orelse
+        return error.InvalidConfigPath;
+    const default_data_path = try std.fs.path.join(allocator, &.{
+        config_dir,
+        "data",
+    });
+    defer allocator.free(default_data_path);
+
+    var input_buffer: [4096]u8 = undefined;
+    var output_buffer: [1024]u8 = undefined;
+    var reader = std.Io.File.stdin().reader(io, &input_buffer);
+    var writer = std.Io.File.stdout().writer(io, &output_buffer);
+
+    const data_path = try prompt_line_with_default(
+        allocator,
+        &reader.interface,
+        &writer.interface,
+        "Data Library path",
+        default_data_path,
+    );
+    defer allocator.free(data_path);
+
+    const cfg = config.Config{
+        .data_path = data_path,
+    };
+    try cfg.validate();
+
+    var data_dir = try std.Io.Dir.cwd().createDirPathOpen(
+        io,
+        cfg.data_path,
+        .{},
+    );
+    defer data_dir.close(io);
+
+    const library = music_library.MusicLibrary{
+        .targets = &.{},
+    };
+
+    try library.write_new(
+        io,
+        allocator,
+        data_dir,
+        "music_library.zon",
+    );
+
+    try std.Io.Dir.cwd().createDirPath(
+        io,
+        config_dir,
+    );
+
+    try cfg.write_new(
+        io,
+        allocator,
+        std.Io.Dir.cwd(),
+        config_filepath,
+    );
+
+    try writer.interface.print(
+        "\nMusicHook is initialised.\n" ++
+            "Next: install the web extension, then run:\n" ++
+            "  music play <YouTube URL>\n",
+        .{},
+    );
+    try writer.interface.flush();
+}
+
+// SECTION: 'play' subcommand
 fn execute_handle_unsupported_url(url: []const u8) void {
     std.debug.print("Does not supported given url: {s}\n", .{url});
 }
@@ -126,7 +213,7 @@ fn execute_play_alias(
     return;
 }
 
-fn library_path(
+fn config_path(
     allocator: std.mem.Allocator,
     home: []const u8,
 ) std.mem.Allocator.Error![]u8 {
@@ -134,7 +221,7 @@ fn library_path(
         home,
         ".config",
         "music_hook",
-        "music_library.zon",
+        "config.zon",
     });
 }
 
@@ -168,16 +255,57 @@ fn classify_play_target(play_target: []const u8) PlayTargetKind {
     return PlayTargetKind{ .unsupported_url = play_target };
 }
 
+fn prompt_line(
+    allocator: std.mem.Allocator,
+    reader: *std.Io.Reader,
+    writer: *std.Io.Writer,
+    question: []const u8,
+) ![]u8 {
+    try writer.print("{s}", .{question});
+    try writer.flush();
+
+    const line = (try reader.takeDelimiter('\n')) orelse
+        return error.EndOfStream;
+
+    const answer = std.mem.trimEnd(u8, line, "\r");
+    return allocator.dupe(u8, answer);
+}
+
+fn prompt_line_with_default(
+    allocator: std.mem.Allocator,
+    reader: *std.Io.Reader,
+    writer: *std.Io.Writer,
+    label: []const u8,
+    default_value: []const u8,
+) ![]u8 {
+    try writer.print("{s} [{s}]:", .{
+        label,
+        default_value,
+    });
+    try writer.flush();
+
+    const line = (try reader.takeDelimiter('\n')) orelse
+        return error.EndOfStream;
+
+    const answer = std.mem.trimEnd(
+        u8,
+        line,
+        "\r",
+    );
+    if (answer.len == 0) return allocator.dupe(u8, default_value);
+    return allocator.dupe(u8, answer);
+}
+
 // SECTION: Test Harness
-test "library_path builds the music library location" {
-    const path = try library_path(
+test "config_path builds the config location" {
+    const path = try config_path(
         std.testing.allocator,
         "/home/shiori",
     );
     defer std.testing.allocator.free(path);
 
     try std.testing.expectEqualStrings(
-        "/home/shiori/.config/music_hook/music_library.zon",
+        "/home/shiori/.config/music_hook/config.zon",
         path,
     );
 }
@@ -236,4 +364,84 @@ test "classify_play_target recognises an alias" {
         ),
         else => return error.TestUnexpectedResult,
     }
+}
+
+test "prompt_line writes a question and returns the answer" {
+    var reader = std.Io.Reader.fixed(
+        "/home/shiori/.config/music_hook/data\n",
+    );
+
+    var output_buffer: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&output_buffer);
+
+    const answer = try prompt_line(
+        std.testing.allocator,
+        &reader,
+        &writer,
+        "Where would you like to store your data library? ",
+    );
+    defer std.testing.allocator.free(answer);
+
+    try std.testing.expectEqualStrings(
+        "/home/shiori/.config/music_hook/data",
+        answer,
+    );
+    try std.testing.expectEqualStrings(
+        "Where would you like to store your data library? ",
+        writer.buffered(),
+    );
+}
+
+test "prompt_line_with_default accepts \n" {
+    var reader = std.Io.Reader.fixed(
+        "\n",
+    );
+
+    var output_buffer: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&output_buffer);
+
+    const answer = try prompt_line_with_default(
+        std.testing.allocator,
+        &reader,
+        &writer,
+        "LABEL",
+        "DEFAULT",
+    );
+    defer std.testing.allocator.free(answer);
+
+    try std.testing.expectEqualStrings(
+        "DEFAULT",
+        answer,
+    );
+    try std.testing.expectEqualStrings(
+        "LABEL [DEFAULT]:",
+        writer.buffered(),
+    );
+}
+
+test "prompt_line_with_default overrides default" {
+    var reader = std.Io.Reader.fixed(
+        "NOT_DEFAULT",
+    );
+
+    var output_buffer: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&output_buffer);
+
+    const answer = try prompt_line_with_default(
+        std.testing.allocator,
+        &reader,
+        &writer,
+        "LABEL",
+        "DEFAULT",
+    );
+    defer std.testing.allocator.free(answer);
+
+    try std.testing.expectEqualStrings(
+        "NOT_DEFAULT",
+        answer,
+    );
+    try std.testing.expectEqualStrings(
+        "LABEL [DEFAULT]:",
+        writer.buffered(),
+    );
 }

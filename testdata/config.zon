@@ -1,0 +1,3 @@
+.{
+    .data_path = "/home/shiori/.config/music_hook/data",
+}

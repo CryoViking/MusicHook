@@ -24,9 +24,10 @@ pub const MusicLibrary = struct {
     pub fn load(
         io: std.Io,
         allocator: std.mem.Allocator,
+        dir: std.Io.Dir,
         path: []const u8,
     ) !MusicLibrary {
-        const contents = try std.Io.Dir.cwd().readFileAllocOptions(
+        const contents = try dir.readFileAllocOptions(
             io,
             path,
             allocator,
@@ -60,6 +61,59 @@ pub const MusicLibrary = struct {
         allocator: std.mem.Allocator,
     ) void {
         std.zon.parse.free(allocator, self);
+    }
+
+    pub fn write_new(
+        self: MusicLibrary,
+        io: std.Io,
+        allocator: std.mem.Allocator,
+        dir: std.Io.Dir,
+        path: []const u8,
+    ) !void {
+        try self.validate();
+
+        var output = std.Io.Writer.Allocating.init(allocator);
+        defer output.deinit();
+
+        var serializer = std.zon.Serializer{
+            .writer = &output.writer,
+        };
+
+        var zon_library = try serializer.beginStruct(.{
+            .whitespace_style = .{ .wrap = true },
+        });
+
+        var zon_targets = try zon_library.beginTupleField(
+            "targets",
+            .{ .whitespace_style = .{ .wrap = true } },
+        );
+
+        for (self.targets) |entry| {
+            var zon_target = try zon_targets.beginStructField(
+                .{ .whitespace_style = .{ .wrap = true } },
+            );
+
+            try zon_target.field("alias", entry.alias, .{});
+            try zon_target.field("title", entry.title, .{});
+            try zon_target.field("kind", entry.kind, .{});
+            try zon_target.field("source", entry.source, .{});
+            try zon_target.field("url", entry.url, .{});
+
+            try zon_target.end();
+        }
+
+        try zon_targets.end();
+        try zon_library.end();
+
+        try output.writer.writeByte('\n');
+
+        try dir.writeFile(io, .{
+            .sub_path = path,
+            .data = output.writer.buffered(),
+            .flags = .{
+                .exclusive = true,
+            },
+        });
     }
 
     pub fn find(
@@ -161,11 +215,11 @@ test "reads valid library fixture" {
     const library = try MusicLibrary.load(
         std.testing.io,
         std.testing.allocator,
+        std.Io.Dir.cwd(),
         "testdata/valid-library.zon",
     );
     defer library.deinit(std.testing.allocator);
 
-    try library.validate();
     try std.testing.expect(library.targets.len == 2);
     try std.testing.expectEqualStrings(
         "dusk",
@@ -183,6 +237,7 @@ test "rejects duplicated aliases in a fixture" {
         MusicLibrary.load(
             std.testing.io,
             std.testing.allocator,
+            std.Io.Dir.cwd(),
             "testdata/duplicate-alias.zon",
         ),
     );
@@ -194,6 +249,7 @@ test "finds alias in test fixture" {
     const library = try MusicLibrary.load(
         std.testing.io,
         std.testing.allocator,
+        std.Io.Dir.cwd(),
         "testdata/valid-library.zon",
     );
     defer library.deinit(std.testing.allocator);
@@ -211,10 +267,82 @@ test "returns null on non existent alias" {
     const library = try MusicLibrary.load(
         std.testing.io,
         std.testing.allocator,
+        std.Io.Dir.cwd(),
         "testdata/valid-library.zon",
     );
     defer library.deinit(std.testing.allocator);
 
     const music_target = library.find("dawn");
     try std.testing.expect(music_target == null);
+}
+
+test "writes a new library that can be loaded" {
+    var temp_dir = std.testing.tmpDir(.{});
+    defer temp_dir.cleanup();
+
+    const expected = MusicLibrary{
+        .targets = &.{
+            .{
+                .alias = "dusk",
+                .title = "Dusk Focus",
+                .kind = .playlist,
+                .source = .ytmusic,
+                .url = "https://music.youtube.com/playlist?list=example",
+            },
+        },
+    };
+
+    try expected.write_new(
+        std.testing.io,
+        std.testing.allocator,
+        temp_dir.dir,
+        "music_library.zon",
+    );
+
+    const actual = try MusicLibrary.load(
+        std.testing.io,
+        std.testing.allocator,
+        temp_dir.dir,
+        "music_library.zon",
+    );
+    defer actual.deinit(std.testing.allocator);
+
+    try std.testing.expectEqualStrings(
+        "dusk",
+        actual.targets[0].alias,
+    );
+}
+
+test "does not overwrite an existing config" {
+    var temp_dir = std.testing.tmpDir(.{});
+    defer temp_dir.cleanup();
+
+    const expected = MusicLibrary{
+        .targets = &.{
+            .{
+                .alias = "dusk",
+                .title = "Dusk Focus",
+                .kind = .playlist,
+                .source = .ytmusic,
+                .url = "https://music.youtube.com/playlist?list=example",
+            },
+        },
+    };
+
+    try expected.write_new(
+        std.testing.io,
+        std.testing.allocator,
+        temp_dir.dir,
+        "config.zon",
+    );
+
+    try std.testing.expectError(
+        error.PathAlreadyExists,
+        expected.write_new(
+            std.testing.io,
+            std.testing.allocator,
+            temp_dir.dir,
+            "config.zon",
+        ),
+    );
 }
