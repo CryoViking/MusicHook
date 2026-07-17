@@ -14,7 +14,6 @@ const SetupError = error{
     NotInitialized,
     DataDirectoryMissing,
     LibraryMissing,
-    AlreadyInitialized,
 };
 
 pub fn main(init: std.process.Init) !u8 {
@@ -63,16 +62,8 @@ pub fn main(init: std.process.Init) !u8 {
                 );
                 return 1;
             },
-            SetupError.AlreadyInitialized => {
-                std.debug.print(
-                    "MusicHook is already initialized.\n",
-                    .{},
-                );
-                return 1;
-            },
             else => |other| return other,
         };
-
         return 0;
     } else |err| {
         switch (err) {
@@ -175,10 +166,11 @@ fn execute_init(
 ) !void {
     const config_dir = std.fs.path.dirname(config_filepath) orelse
         return error.InvalidConfigPath;
-    const default_data_path = try std.fs.path.join(allocator, &.{
-        config_dir,
-        "data",
-    });
+    const default_data_path = try init_default_data_path(
+        io,
+        allocator,
+        config_filepath,
+    );
     defer allocator.free(default_data_path);
 
     var input_buffer: [4096]u8 = undefined;
@@ -186,6 +178,10 @@ fn execute_init(
     var reader = std.Io.File.stdin().reader(io, &input_buffer);
     var writer = std.Io.File.stdout().writer(io, &output_buffer);
 
+    // Load existing config if it exists, and if it does
+    // populate defaults with existing values.
+    //
+    // Allows for safe overwrite
     const data_path = try prompt_line_with_default(
         allocator,
         &reader.interface,
@@ -198,6 +194,7 @@ fn execute_init(
     const cfg = config.Config{
         .data_path = data_path,
     };
+
     try cfg.validate();
 
     var data_dir = try std.Io.Dir.cwd().createDirPathOpen(
@@ -207,23 +204,33 @@ fn execute_init(
     );
     defer data_dir.close(io);
 
-    const library = music_library.MusicLibrary{
-        .targets = &.{},
-    };
-
-    try library.write_new(
+    const existing_music_library = music_library.MusicLibrary.load(
         io,
         allocator,
         data_dir,
         "music_library.zon",
-    );
+    ) catch |err| switch (err) {
+        error.FileNotFound => null, // like "pass" in python
+        else => |other| return other,
+    };
+    if (existing_music_library) |library| {
+        defer library.deinit(allocator);
+    } else {
+        const library = music_library.MusicLibrary{
+            .targets = &.{},
+        };
 
-    try std.Io.Dir.cwd().createDirPath(
-        io,
-        config_dir,
-    );
+        try library.write_new(
+            io,
+            allocator,
+            data_dir,
+            "music_library.zon",
+        );
+    }
 
-    try cfg.write_new(
+    try std.Io.Dir.cwd().createDirPath(io, config_dir);
+
+    try cfg.write(
         io,
         allocator,
         std.Io.Dir.cwd(),
@@ -237,6 +244,33 @@ fn execute_init(
         .{},
     );
     try writer.interface.flush();
+}
+
+fn init_default_data_path(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    config_filepath: []const u8,
+) ![]u8 {
+    const existing_cfg = config.Config.load(
+        io,
+        allocator,
+        std.Io.Dir.cwd(),
+        config_filepath,
+    ) catch |err| switch (err) {
+        error.FileNotFound => {
+            const config_dir = std.fs.path.dirname(config_filepath) orelse
+                return error.InvalidConfigPath;
+
+            return std.fs.path.join(allocator, &.{
+                config_dir,
+                "data",
+            });
+        },
+        else => |other| return other,
+    };
+    defer existing_cfg.deinit(allocator);
+
+    return allocator.dupe(u8, existing_cfg.data_path);
 }
 
 // SECTION: 'play' subcommand

@@ -43,6 +43,39 @@ pub const Config = struct {
         return config;
     }
 
+    pub fn write(
+        self: Config,
+        io: std.Io,
+        allocator: std.mem.Allocator,
+        dir: std.Io.Dir,
+        path: []const u8,
+    ) !void {
+        try self.validate();
+
+        var output = std.Io.Writer.Allocating.init(allocator);
+        defer output.deinit();
+
+        var serializer = std.zon.Serializer{
+            .writer = &output.writer,
+        };
+
+        var zon_config = try serializer.beginStruct(.{
+            .whitespace_style = .{ .wrap = true },
+        });
+        try zon_config.field("data_path", self.data_path, .{});
+        try zon_config.end();
+
+        try output.writer.writeByte('\n');
+
+        try dir.writeFile(io, .{
+            .sub_path = path,
+            .data = output.writer.buffered(),
+            .flags = .{
+                .exclusive = false,
+            },
+        });
+    }
+
     pub fn write_new(
         self: Config,
         io: std.Io,
@@ -129,7 +162,7 @@ test "reads valid config fixture" {
     );
 }
 
-test "writes config that can be loaded" {
+test "write_new writes config that can be loaded" {
     // This creates a directory in .zig_cache/tmp
     var temp_dir = std.testing.tmpDir(.{});
     defer temp_dir.cleanup();
@@ -159,7 +192,7 @@ test "writes config that can be loaded" {
     );
 }
 
-test "does not overwrite an existing config" {
+test "write_new does not overwrite an existing config" {
     var temp_dir = std.testing.tmpDir(.{});
     defer temp_dir.cleanup();
 
@@ -182,5 +215,44 @@ test "does not overwrite an existing config" {
             temp_dir.dir,
             "config.zon",
         ),
+    );
+}
+
+test "write overwrites config" {
+    // This creates a directory in .zig_cache/tmp
+    var temp_dir = std.testing.tmpDir(.{});
+    defer temp_dir.cleanup();
+
+    var expected = Config{
+        .data_path = "/home/shiori/.config/music_hook/data",
+    };
+
+    try expected.write_new(
+        std.testing.io,
+        std.testing.allocator,
+        temp_dir.dir,
+        "config.zon",
+    );
+
+    expected.data_path = "/home/rin/.config/music_hook/data";
+
+    try expected.write(
+        std.testing.io,
+        std.testing.allocator,
+        temp_dir.dir,
+        "config.zon",
+    );
+
+    const actual = try Config.load(
+        std.testing.io,
+        std.testing.allocator,
+        temp_dir.dir,
+        "config.zon",
+    );
+    defer actual.deinit(std.testing.allocator);
+
+    try std.testing.expectEqualStrings(
+        expected.data_path,
+        actual.data_path,
     );
 }
