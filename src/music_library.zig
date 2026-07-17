@@ -313,7 +313,7 @@ test "writes a new library that can be loaded" {
     );
 }
 
-test "does not overwrite an existing config" {
+test "does not overwrite an existing library" {
     var temp_dir = std.testing.tmpDir(.{});
     defer temp_dir.cleanup();
 
@@ -333,7 +333,7 @@ test "does not overwrite an existing config" {
         std.testing.io,
         std.testing.allocator,
         temp_dir.dir,
-        "config.zon",
+        "music_library.zon",
     );
 
     try std.testing.expectError(
@@ -342,7 +342,7 @@ test "does not overwrite an existing config" {
             std.testing.io,
             std.testing.allocator,
             temp_dir.dir,
-            "config.zon",
+            "music_library.zon",
         ),
     );
 }
