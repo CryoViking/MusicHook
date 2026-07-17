@@ -10,6 +10,13 @@ const PlayTargetKind = union(enum) {
     unsupported_url: []const u8,
 };
 
+const SetupError = error{
+    NotInitialized,
+    DataDirectoryMissing,
+    LibraryMissing,
+    AlreadyInitialized,
+};
+
 pub fn main(init: std.process.Init) !u8 {
     // A pre-initialised general purpose allocator for temporary heap work
     const allocator = init.gpa;
@@ -29,12 +36,42 @@ pub fn main(init: std.process.Init) !u8 {
         const path = try config_path(allocator, home);
         defer allocator.free(path);
 
-        try execute(
+        execute(
             init.io,
             init.gpa,
             path,
             request,
-        );
+        ) catch |err| switch (err) {
+            SetupError.NotInitialized => {
+                std.debug.print(
+                    "MusicHook has not been initialized, Run `music init` first.\n",
+                    .{},
+                );
+                return 1;
+            },
+            SetupError.DataDirectoryMissing => {
+                std.debug.print(
+                    "MusicHook's configured data directory is unavailable.\n",
+                    .{},
+                );
+                return 1;
+            },
+            SetupError.LibraryMissing => {
+                std.debug.print(
+                    "MusicHook's data directory has no music_library.zon file.\n",
+                    .{},
+                );
+                return 1;
+            },
+            SetupError.AlreadyInitialized => {
+                std.debug.print(
+                    "MusicHook is already initialized.\n",
+                    .{},
+                );
+                return 1;
+            },
+            else => |other| return other,
+        };
 
         return 0;
     } else |err| {
@@ -84,20 +121,40 @@ fn execute(
                     execute_play_direct_url(url);
                 },
                 .alias => |alias| {
-                    const cfg = try config.Config.load(
+                    const cfg = config.Config.load(
                         io,
                         allocator,
                         std.Io.Dir.cwd(),
                         config_filepath,
-                    );
+                    ) catch |err| switch (err) {
+                        error.FileNotFound => return SetupError.NotInitialized,
+                        else => |other| return other,
+                    };
                     defer cfg.deinit(allocator);
-                    const library = try music_library.MusicLibrary.load(
+
+                    var data_dir = std.Io.Dir.openDirAbsolute(
+                        io,
+                        cfg.data_path,
+                        .{},
+                    ) catch |err| switch (err) {
+                        error.FileNotFound, error.NotDir => {
+                            return SetupError.DataDirectoryMissing;
+                        },
+                        else => |other| return other,
+                    };
+                    defer data_dir.close(io);
+
+                    const library = music_library.MusicLibrary.load(
                         io,
                         allocator,
-                        std.Io.Dir.cwd(),
-                        cfg.data_path,
-                    );
+                        data_dir,
+                        "music_library.zon",
+                    ) catch |err| switch (err) {
+                        error.FileNotFound => return SetupError.LibraryMissing,
+                        else => |other| return other,
+                    };
                     defer library.deinit(allocator);
+
                     execute_play_alias(library, alias);
                 },
             }
