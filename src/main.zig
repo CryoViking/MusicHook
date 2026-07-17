@@ -3,6 +3,12 @@ const cli = @import("cli.zig");
 const protocol = @import("protocol.zig");
 const music_library = @import("music_library.zig");
 
+const PlayTargetKind = union(enum) {
+    alias: []const u8,
+    direct_url: []const u8,
+    unsupported_url: []const u8,
+};
+
 pub fn main(init: std.process.Init) !u8 {
     // A pre-initialised general purpose allocator for temporary heap work
     const allocator = init.gpa;
@@ -64,13 +70,23 @@ fn execute(
         .play => {
             const play_target = request.play_target orelse
                 return protocol.ProtocolError.MissingPlayTarget;
-            const library = try music_library.MusicLibrary.load(
-                io,
-                allocator,
-                data_path,
-            );
-            defer library.deinit(allocator);
-            execute_play(library, play_target);
+            switch (classify_play_target(play_target)) {
+                .unsupported_url => |url| {
+                    execute_handle_unsupported_url(url);
+                },
+                .direct_url => |url| {
+                    execute_play_direct_url(url);
+                },
+                .alias => |alias| {
+                    const library = try music_library.MusicLibrary.load(
+                        io,
+                        allocator,
+                        data_path,
+                    );
+                    defer library.deinit(allocator);
+                    execute_play_alias(library, alias);
+                },
+            }
         },
         else => stub(),
     }
@@ -80,11 +96,19 @@ fn stub() void {
     std.debug.print("Stubbed command, doesn't exist yet\n", .{});
 }
 
-fn execute_play(
+fn execute_handle_unsupported_url(url: []const u8) void {
+    std.debug.print("Does not supported given url: {s}\n", .{url});
+}
+
+fn execute_play_direct_url(url: []const u8) void {
+    std.debug.print("Would play {s} here\n", .{url});
+}
+
+fn execute_play_alias(
     library: music_library.MusicLibrary,
-    play_target: []const u8,
+    alias: []const u8,
 ) void {
-    const request_target = library.find(play_target);
+    const request_target = library.find(alias);
     if (request_target) |item| {
         std.debug.print(
             "Target found: alias - {s} | title - {s}",
@@ -114,6 +138,37 @@ fn library_path(
     });
 }
 
+fn is_youtube_domain(domain: []const u8) bool {
+    const targets = [_][]const u8{
+        "youtube.com",
+        "music.youtube.com",
+    };
+
+    for (targets) |target| {
+        if (std.mem.eql(u8, domain, target) or
+            std.mem.endsWith(u8, domain, target) and
+                domain[domain.len - target.len - 1] == '.')
+            return true;
+    }
+    return false;
+}
+
+fn classify_play_target(play_target: []const u8) PlayTargetKind {
+    const uri = std.Uri.parse(play_target) catch {
+        return PlayTargetKind{ .alias = play_target };
+    };
+
+    if (std.mem.eql(u8, uri.scheme, "https")) {
+        if (uri.host) |host| {
+            const domain = host.percent_encoded;
+            if (is_youtube_domain(domain))
+                return PlayTargetKind{ .direct_url = play_target };
+        }
+    }
+    return PlayTargetKind{ .unsupported_url = play_target };
+}
+
+// SECTION: Test Harness
 test "library_path builds the music library location" {
     const path = try library_path(
         std.testing.allocator,
@@ -125,4 +180,60 @@ test "library_path builds the music library location" {
         "/home/shiori/.config/music_hook/music_library.zon",
         path,
     );
+}
+
+test "classify_play_target recognises a YouTube URL" {
+    const result = classify_play_target(
+        "https://www.youtube.com/watch?v=example",
+    );
+
+    switch (result) {
+        .direct_url => |url| try std.testing.expectEqualStrings(
+            "https://www.youtube.com/watch?v=example",
+            url,
+        ),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "classify_play_target recognises a YouTube Music URL" {
+    const result = classify_play_target(
+        "https://music.youtube.com/watch?v=example",
+    );
+
+    switch (result) {
+        .direct_url => |url| try std.testing.expectEqualStrings(
+            "https://music.youtube.com/watch?v=example",
+            url,
+        ),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "classify_play_target recognises an Unsupported URL" {
+    const result = classify_play_target(
+        "https://www.notyoutube.com/watch?v=example",
+    );
+
+    switch (result) {
+        .unsupported_url => |url| try std.testing.expectEqualStrings(
+            "https://www.notyoutube.com/watch?v=example",
+            url,
+        ),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "classify_play_target recognises an alias" {
+    const result = classify_play_target(
+        "dusk",
+    );
+
+    switch (result) {
+        .alias => |alias| try std.testing.expectEqualStrings(
+            "dusk",
+            alias,
+        ),
+        else => return error.TestUnexpectedResult,
+    }
 }
