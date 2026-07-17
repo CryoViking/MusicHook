@@ -4,13 +4,13 @@ const protocol = @import("protocol.zig");
 // The job of this parser is to essentially do the following:
 // ["play", "dusk"]  →  Request{ .command = .play, .alias = "dusk" }
 // ["pause"]         →  Request{ .command = .pause }
-// ["play"]          →  error.MissingAlias
+// ["play"]          →  error.MissingPlayTarget
 // ["dance"]         →  error.UnknownCommand
 
 pub const ParseError = error{
     MissingCommand,
     UnknownCommand,
-    MissingAlias,
+    MissingPlayTarget,
     UnexpectedArgument,
 };
 
@@ -32,12 +32,12 @@ pub fn parse(args: []const []const u8) ParseError!protocol.Request {
 fn parsePlay(args: []const []const u8) ParseError!protocol.Request {
     std.debug.assert(args.len >= 1);
 
-    if (args.len == 1) return error.MissingAlias;
+    if (args.len == 1) return error.MissingPlayTarget;
     if (args.len > 2) return error.UnexpectedArgument;
 
     return .{
         .command = .play,
-        .alias = args[1],
+        .play_target = args[1],
     };
 }
 
@@ -80,9 +80,9 @@ test "play does accept an alias" {
         protocol.Command.play,
         request.command,
     );
-    try std.testing.expect(request.alias != null);
+    try std.testing.expect(request.play_target != null);
     try std.testing.expectEqual(
-        request.alias,
+        request.play_target,
         "dusk",
     );
 }
@@ -91,7 +91,7 @@ test "play fails on no alias" {
     const args = [_][]const u8{"play"};
 
     try std.testing.expectError(
-        ParseError.MissingAlias,
+        ParseError.MissingPlayTarget,
         parse(&args),
     );
 }
@@ -118,7 +118,7 @@ test "pause does not accept an alias" {
         protocol.Command.pause,
         request.command,
     );
-    try std.testing.expect(request.alias == null);
+    try std.testing.expect(request.play_target == null);
 }
 
 test "pause fails on alias" {
@@ -142,7 +142,7 @@ test "sync does not accept an alias" {
         protocol.Command.sync,
         request.command,
     );
-    try std.testing.expect(request.alias == null);
+    try std.testing.expect(request.play_target == null);
 }
 
 test "sync fails on alias" {
@@ -166,7 +166,7 @@ test "list does not accept an alias" {
         protocol.Command.list,
         request.command,
     );
-    try std.testing.expect(request.alias == null);
+    try std.testing.expect(request.play_target == null);
 }
 
 test "list fails on alias" {
@@ -190,7 +190,7 @@ test "status does not accept an alias" {
         protocol.Command.status,
         request.command,
     );
-    try std.testing.expect(request.alias == null);
+    try std.testing.expect(request.play_target == null);
 }
 
 test "status fails on alias" {
@@ -214,12 +214,36 @@ test "resume does not accept an alias" {
         protocol.Command.@"resume",
         request.command,
     );
-    try std.testing.expect(request.alias == null);
+    try std.testing.expect(request.play_target == null);
 }
 
 test "resume fails on alias" {
     const args = [_][]const u8{
         "resume",
+        "dusk",
+    };
+
+    try std.testing.expectError(
+        ParseError.UnexpectedArgument,
+        parse(&args),
+    );
+}
+
+test "init does not accept an alias" {
+    const args = [_][]const u8{"init"};
+
+    const request = try parse(&args);
+
+    try std.testing.expectEqual(
+        protocol.Command.init,
+        request.command,
+    );
+    try std.testing.expect(request.play_target == null);
+}
+
+test "init fails on alias" {
+    const args = [_][]const u8{
+        "init",
         "dusk",
     };
 

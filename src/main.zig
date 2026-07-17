@@ -22,11 +22,10 @@ pub fn main(init: std.process.Init) !u8 {
         const path = try library_path(allocator, home);
         defer allocator.free(path);
 
-        const lib_path = "~/.config/music_hook/music_library.zon";
         try execute(
             init.io,
             init.gpa,
-            lib_path,
+            path,
             request,
         );
 
@@ -47,8 +46,8 @@ pub fn main(init: std.process.Init) !u8 {
                 // along those lines
                 std.debug.print("Unexpected argument given\n", .{});
             },
-            cli.ParseError.MissingAlias => {
-                std.debug.print("No playlist alias given\n", .{});
+            cli.ParseError.MissingPlayTarget => {
+                std.debug.print("No play target was given", .{});
             },
         }
         return 1; // return a non-zero exit code
@@ -63,13 +62,15 @@ fn execute(
 ) !void {
     switch (request.command) {
         .play => {
+            const play_target = request.play_target orelse
+                return protocol.ProtocolError.MissingPlayTarget;
             const library = try music_library.MusicLibrary.load(
                 io,
                 allocator,
                 data_path,
             );
             defer library.deinit(allocator);
-            execute_play(library, request.alias.?);
+            execute_play(library, play_target);
         },
         else => stub(),
     }
@@ -81,9 +82,9 @@ fn stub() void {
 
 fn execute_play(
     library: music_library.MusicLibrary,
-    alias: []const u8,
+    play_target: []const u8,
 ) void {
-    const request_target = library.find(alias);
+    const request_target = library.find(play_target);
     if (request_target) |item| {
         std.debug.print(
             "Target found: alias - {s} | title - {s}",

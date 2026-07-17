@@ -1,11 +1,12 @@
 const std = @import("std");
 
 pub const ProtocolError = error{
-    MissingAlias,
-    UnexpectedAlias,
+    MissingPlayTarget,
+    UnexpectedPlayTarget,
 };
 
 pub const Command = enum {
+    init,
     sync,
     list,
     play,
@@ -16,39 +17,39 @@ pub const Command = enum {
 
 pub const Request = struct {
     command: Command,
-    alias: ?[]const u8 = null,
+    play_target: ?[]const u8 = null,
 
     pub fn validate(self: Request) ProtocolError!void {
         switch (self.command) {
-            .play => if (self.alias == null) return error.MissingAlias,
-            else => if (self.alias != null) return error.UnexpectedAlias,
+            .play => if (self.play_target == null) return error.MissingPlayTarget,
+            else => if (self.play_target != null) return error.UnexpectedPlayTarget,
         }
     }
 };
 
-test "play requires an alias" {
+test "play requires an play_target" {
     const request = Request{ .command = .play };
     try std.testing.expectError(
-        error.MissingAlias,
+        error.MissingPlayTarget,
         request.validate(),
     );
 }
 
-test "pause does not accept an alias" {
+test "pause does not accept an play_target" {
     const request = Request{
         .command = .pause,
-        .alias = "dusk",
+        .play_target = "dusk",
     };
     try std.testing.expectError(
-        error.UnexpectedAlias,
+        error.UnexpectedPlayTarget,
         request.validate(),
     );
 }
 
-test "play accepts an alias" {
+test "play accepts an play_target" {
     const request = Request{
         .command = .play,
-        .alias = "dusk",
+        .play_target = "dusk",
     };
     try request.validate();
 }
