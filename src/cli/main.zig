@@ -9,6 +9,7 @@ const utils = utils_module.utils;
 const host_client = @import("host_client.zig");
 const bridge_module = @import("bridge_module");
 const bridge_protocol = bridge_module.protocol;
+const bridge_frame = bridge_module.frame;
 
 const PlayTargetKind = union(enum) {
     alias: []const u8,
@@ -125,6 +126,7 @@ fn execute(
                 },
                 .direct_url => |url| {
                     try execute_play_direct_url(context, url);
+                    std.debug.print("Playback started.\n", .{});
                 },
                 .alias => |alias| {
                     const cfg = config.Config.load(
@@ -311,9 +313,7 @@ fn execute_play_direct_url(context: ExecutionContext, url: []const u8) !void {
     );
 
     switch (response.status) {
-        .ok => {
-            std.debug.print("Playback started.\n", .{});
-        },
+        .ok => {},
         .failed => switch (response.error_code.?) {
             .extension_unavailable => return error.ExtensionUnavailable,
             .zen_unavailable => return error.ZenUnavailable,
@@ -575,4 +575,544 @@ test "prompt_line_with_default overrides default" {
         "LABEL [DEFAULT]:",
         writer.buffered(),
     );
+}
+test "direct URL play succeeds when the host returns ok" {
+    const response_json =
+        "{\"status\":\"ok\",\"error_code\":null}";
+
+    const response_frame = try (bridge_frame.NativeMessage{
+        .json_bytes = response_json,
+    }).encode(std.testing.allocator);
+    defer std.testing.allocator.free(response_frame);
+
+    var temp_dir = std.testing.tmpDir(.{});
+    defer temp_dir.cleanup();
+
+    var runtime_dir_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const runtime_dir_length = try temp_dir.dir.realPath(
+        std.testing.io,
+        &runtime_dir_buffer,
+    );
+    const runtime_dir = runtime_dir_buffer[0..runtime_dir_length];
+
+    var socket_dir = try temp_dir.dir.createDirPathOpen(
+        std.testing.io,
+        "music_hook",
+        .{
+            .permissions = .fromMode(0o700),
+        },
+    );
+    defer socket_dir.close(std.testing.io);
+
+    const socket_path = try utils.runtime_socket_path(
+        std.testing.allocator,
+        null,
+        runtime_dir,
+    );
+    defer std.testing.allocator.free(socket_path);
+
+    const socket_address = try std.Io.net.UnixAddress.init(socket_path);
+
+    var listener = try socket_address.listen(std.testing.io, .{});
+    defer {
+        listener.deinit(std.testing.io);
+        std.Io.Dir.deleteFileAbsolute(std.testing.io, socket_path) catch {};
+    }
+
+    const FakeHost = struct {
+        listener: *std.Io.net.Server,
+        response_frame: []const u8,
+        err: ?anyerror = null,
+
+        fn run(self: *@This()) void {
+            self.serve() catch |err| {
+                self.err = err;
+            };
+        }
+
+        fn serve(self: *@This()) !void {
+            const client = try self.listener.accept(std.testing.io);
+            defer client.close(std.testing.io);
+
+            var input_buffer: [4096]u8 = undefined;
+            var reader = client.reader(std.testing.io, &input_buffer);
+
+            const request_frame = try bridge_frame.read_frame(
+                std.testing.allocator,
+                &reader.interface,
+            );
+            defer std.testing.allocator.free(request_frame);
+
+            const request_message = try bridge_frame.NativeMessage.decode(
+                request_frame,
+            );
+
+            var parsed_request = try std.json.parseFromSlice(
+                bridge_protocol.Request,
+                std.testing.allocator,
+                request_message.json_bytes,
+                .{},
+            );
+            defer parsed_request.deinit();
+
+            try parsed_request.value.validate();
+            try std.testing.expectEqual(
+                bridge_protocol.Command.play,
+                parsed_request.value.command,
+            );
+            try std.testing.expectEqualStrings(
+                "https://music.youtube.com/watch?v=example",
+                parsed_request.value.url,
+            );
+
+            var output_buffer: [1024]u8 = undefined;
+            var writer = client.writer(std.testing.io, &output_buffer);
+            try bridge_frame.write_frame(
+                &writer.interface,
+                self.response_frame,
+            );
+        }
+    };
+
+    var fake_host = FakeHost{
+        .listener = &listener,
+        .response_frame = response_frame,
+    };
+
+    const server_thread = try std.Thread.spawn(
+        .{},
+        FakeHost.run,
+        .{&fake_host},
+    );
+
+    var joined = false;
+    defer {
+        if (!joined) server_thread.join();
+    }
+
+    const context = ExecutionContext{
+        .io = std.testing.io,
+        .allocator = std.testing.allocator,
+        .config_filepath = "",
+        .xdg_runtime_dir = null,
+        .temp_dir = runtime_dir,
+    };
+
+    try execute_play_direct_url(
+        context,
+        "https://music.youtube.com/watch?v=example",
+    );
+
+    server_thread.join();
+    joined = true;
+
+    if (fake_host.err) |err| return err;
+}
+
+test "direct URL play maps zen_unavailable to a CLI error" {
+    const response_json =
+        "{\"status\":\"failed\",\"error_code\":\"zen_unavailable\"}";
+
+    const response_frame = try (bridge_frame.NativeMessage{
+        .json_bytes = response_json,
+    }).encode(std.testing.allocator);
+    defer std.testing.allocator.free(response_frame);
+
+    var temp_dir = std.testing.tmpDir(.{});
+    defer temp_dir.cleanup();
+
+    var runtime_dir_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const runtime_dir_length = try temp_dir.dir.realPath(
+        std.testing.io,
+        &runtime_dir_buffer,
+    );
+    const runtime_dir = runtime_dir_buffer[0..runtime_dir_length];
+
+    var socket_dir = try temp_dir.dir.createDirPathOpen(
+        std.testing.io,
+        "music_hook",
+        .{
+            .permissions = .fromMode(0o700),
+        },
+    );
+    defer socket_dir.close(std.testing.io);
+
+    const socket_path = try utils.runtime_socket_path(
+        std.testing.allocator,
+        null,
+        runtime_dir,
+    );
+    defer std.testing.allocator.free(socket_path);
+
+    const socket_address = try std.Io.net.UnixAddress.init(socket_path);
+
+    var listener = try socket_address.listen(std.testing.io, .{});
+    defer {
+        listener.deinit(std.testing.io);
+        std.Io.Dir.deleteFileAbsolute(std.testing.io, socket_path) catch {};
+    }
+
+    const FakeHost = struct {
+        listener: *std.Io.net.Server,
+        response_frame: []const u8,
+        err: ?anyerror = null,
+
+        fn run(self: *@This()) void {
+            self.serve() catch |err| {
+                self.err = err;
+            };
+        }
+
+        fn serve(self: *@This()) !void {
+            const client = try self.listener.accept(std.testing.io);
+            defer client.close(std.testing.io);
+
+            var input_buffer: [4096]u8 = undefined;
+            var reader = client.reader(std.testing.io, &input_buffer);
+
+            const request_frame = try bridge_frame.read_frame(
+                std.testing.allocator,
+                &reader.interface,
+            );
+            defer std.testing.allocator.free(request_frame);
+
+            const request_message = try bridge_frame.NativeMessage.decode(
+                request_frame,
+            );
+
+            var parsed_request = try std.json.parseFromSlice(
+                bridge_protocol.Request,
+                std.testing.allocator,
+                request_message.json_bytes,
+                .{},
+            );
+            defer parsed_request.deinit();
+
+            try parsed_request.value.validate();
+            try std.testing.expectEqual(
+                bridge_protocol.Command.play,
+                parsed_request.value.command,
+            );
+            try std.testing.expectEqualStrings(
+                "https://music.youtube.com/watch?v=example",
+                parsed_request.value.url,
+            );
+
+            var output_buffer: [1024]u8 = undefined;
+            var writer = client.writer(std.testing.io, &output_buffer);
+            try bridge_frame.write_frame(
+                &writer.interface,
+                self.response_frame,
+            );
+        }
+    };
+
+    var fake_host = FakeHost{
+        .listener = &listener,
+        .response_frame = response_frame,
+    };
+
+    const server_thread = try std.Thread.spawn(
+        .{},
+        FakeHost.run,
+        .{&fake_host},
+    );
+
+    var joined = false;
+    defer {
+        if (!joined) server_thread.join();
+    }
+
+    const context = ExecutionContext{
+        .io = std.testing.io,
+        .allocator = std.testing.allocator,
+        .config_filepath = "",
+        .xdg_runtime_dir = null,
+        .temp_dir = runtime_dir,
+    };
+
+    try std.testing.expectError(
+        error.ZenUnavailable,
+        execute_play_direct_url(
+            context,
+            "https://music.youtube.com/watch?v=example",
+        ),
+    );
+
+    server_thread.join();
+    joined = true;
+
+    if (fake_host.err) |err| return err;
+}
+
+test "direct URL play maps extension_unavailable to a CLI error" {
+    const response_json =
+        "{\"status\":\"failed\",\"error_code\":\"extension_unavailable\"}";
+
+    const response_frame = try (bridge_frame.NativeMessage{
+        .json_bytes = response_json,
+    }).encode(std.testing.allocator);
+    defer std.testing.allocator.free(response_frame);
+
+    var temp_dir = std.testing.tmpDir(.{});
+    defer temp_dir.cleanup();
+
+    var runtime_dir_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const runtime_dir_length = try temp_dir.dir.realPath(
+        std.testing.io,
+        &runtime_dir_buffer,
+    );
+    const runtime_dir = runtime_dir_buffer[0..runtime_dir_length];
+
+    var socket_dir = try temp_dir.dir.createDirPathOpen(
+        std.testing.io,
+        "music_hook",
+        .{
+            .permissions = .fromMode(0o700),
+        },
+    );
+    defer socket_dir.close(std.testing.io);
+
+    const socket_path = try utils.runtime_socket_path(
+        std.testing.allocator,
+        null,
+        runtime_dir,
+    );
+    defer std.testing.allocator.free(socket_path);
+
+    const socket_address = try std.Io.net.UnixAddress.init(socket_path);
+
+    var listener = try socket_address.listen(std.testing.io, .{});
+    defer {
+        listener.deinit(std.testing.io);
+        std.Io.Dir.deleteFileAbsolute(std.testing.io, socket_path) catch {};
+    }
+
+    const FakeHost = struct {
+        listener: *std.Io.net.Server,
+        response_frame: []const u8,
+        err: ?anyerror = null,
+
+        fn run(self: *@This()) void {
+            self.serve() catch |err| {
+                self.err = err;
+            };
+        }
+
+        fn serve(self: *@This()) !void {
+            const client = try self.listener.accept(std.testing.io);
+            defer client.close(std.testing.io);
+
+            var input_buffer: [4096]u8 = undefined;
+            var reader = client.reader(std.testing.io, &input_buffer);
+
+            const request_frame = try bridge_frame.read_frame(
+                std.testing.allocator,
+                &reader.interface,
+            );
+            defer std.testing.allocator.free(request_frame);
+
+            const request_message = try bridge_frame.NativeMessage.decode(
+                request_frame,
+            );
+
+            var parsed_request = try std.json.parseFromSlice(
+                bridge_protocol.Request,
+                std.testing.allocator,
+                request_message.json_bytes,
+                .{},
+            );
+            defer parsed_request.deinit();
+
+            try parsed_request.value.validate();
+            try std.testing.expectEqual(
+                bridge_protocol.Command.play,
+                parsed_request.value.command,
+            );
+            try std.testing.expectEqualStrings(
+                "https://music.youtube.com/watch?v=example",
+                parsed_request.value.url,
+            );
+
+            var output_buffer: [1024]u8 = undefined;
+            var writer = client.writer(std.testing.io, &output_buffer);
+            try bridge_frame.write_frame(
+                &writer.interface,
+                self.response_frame,
+            );
+        }
+    };
+
+    var fake_host = FakeHost{
+        .listener = &listener,
+        .response_frame = response_frame,
+    };
+
+    const server_thread = try std.Thread.spawn(
+        .{},
+        FakeHost.run,
+        .{&fake_host},
+    );
+
+    var joined = false;
+    defer {
+        if (!joined) server_thread.join();
+    }
+
+    const context = ExecutionContext{
+        .io = std.testing.io,
+        .allocator = std.testing.allocator,
+        .config_filepath = "",
+        .xdg_runtime_dir = null,
+        .temp_dir = runtime_dir,
+    };
+
+    try std.testing.expectError(
+        error.ExtensionUnavailable,
+        execute_play_direct_url(
+            context,
+            "https://music.youtube.com/watch?v=example",
+        ),
+    );
+
+    server_thread.join();
+    joined = true;
+
+    if (fake_host.err) |err| return err;
+}
+
+test "direct URL play maps playback_failed to a CLI error" {
+    const response_json =
+        "{\"status\":\"failed\",\"error_code\":\"playback_failed\"}";
+
+    const response_frame = try (bridge_frame.NativeMessage{
+        .json_bytes = response_json,
+    }).encode(std.testing.allocator);
+    defer std.testing.allocator.free(response_frame);
+
+    var temp_dir = std.testing.tmpDir(.{});
+    defer temp_dir.cleanup();
+
+    var runtime_dir_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const runtime_dir_length = try temp_dir.dir.realPath(
+        std.testing.io,
+        &runtime_dir_buffer,
+    );
+    const runtime_dir = runtime_dir_buffer[0..runtime_dir_length];
+
+    var socket_dir = try temp_dir.dir.createDirPathOpen(
+        std.testing.io,
+        "music_hook",
+        .{
+            .permissions = .fromMode(0o700),
+        },
+    );
+    defer socket_dir.close(std.testing.io);
+
+    const socket_path = try utils.runtime_socket_path(
+        std.testing.allocator,
+        null,
+        runtime_dir,
+    );
+    defer std.testing.allocator.free(socket_path);
+
+    const socket_address = try std.Io.net.UnixAddress.init(socket_path);
+
+    var listener = try socket_address.listen(std.testing.io, .{});
+    defer {
+        listener.deinit(std.testing.io);
+        std.Io.Dir.deleteFileAbsolute(std.testing.io, socket_path) catch {};
+    }
+
+    const FakeHost = struct {
+        listener: *std.Io.net.Server,
+        response_frame: []const u8,
+        err: ?anyerror = null,
+
+        fn run(self: *@This()) void {
+            self.serve() catch |err| {
+                self.err = err;
+            };
+        }
+
+        fn serve(self: *@This()) !void {
+            const client = try self.listener.accept(std.testing.io);
+            defer client.close(std.testing.io);
+
+            var input_buffer: [4096]u8 = undefined;
+            var reader = client.reader(std.testing.io, &input_buffer);
+
+            const request_frame = try bridge_frame.read_frame(
+                std.testing.allocator,
+                &reader.interface,
+            );
+            defer std.testing.allocator.free(request_frame);
+
+            const request_message = try bridge_frame.NativeMessage.decode(
+                request_frame,
+            );
+
+            var parsed_request = try std.json.parseFromSlice(
+                bridge_protocol.Request,
+                std.testing.allocator,
+                request_message.json_bytes,
+                .{},
+            );
+            defer parsed_request.deinit();
+
+            try parsed_request.value.validate();
+            try std.testing.expectEqual(
+                bridge_protocol.Command.play,
+                parsed_request.value.command,
+            );
+            try std.testing.expectEqualStrings(
+                "https://music.youtube.com/watch?v=example",
+                parsed_request.value.url,
+            );
+
+            var output_buffer: [1024]u8 = undefined;
+            var writer = client.writer(std.testing.io, &output_buffer);
+            try bridge_frame.write_frame(
+                &writer.interface,
+                self.response_frame,
+            );
+        }
+    };
+
+    var fake_host = FakeHost{
+        .listener = &listener,
+        .response_frame = response_frame,
+    };
+
+    const server_thread = try std.Thread.spawn(
+        .{},
+        FakeHost.run,
+        .{&fake_host},
+    );
+
+    var joined = false;
+    defer {
+        if (!joined) server_thread.join();
+    }
+
+    const context = ExecutionContext{
+        .io = std.testing.io,
+        .allocator = std.testing.allocator,
+        .config_filepath = "",
+        .xdg_runtime_dir = null,
+        .temp_dir = runtime_dir,
+    };
+
+    try std.testing.expectError(
+        error.PlaybackFailed,
+        execute_play_direct_url(
+            context,
+            "https://music.youtube.com/watch?v=example",
+        ),
+    );
+
+    server_thread.join();
+    joined = true;
+
+    if (fake_host.err) |err| return err;
 }

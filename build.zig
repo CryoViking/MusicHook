@@ -55,6 +55,9 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    host_tests.root_module.addImport("utils_module", utils_module);
+    host_tests.root_module.addImport("bridge_module", bridge_module);
+
     const run_host_tests = b.addRunArtifact(host_tests);
     const test_host_step = b.step(
         "test-host",
@@ -62,8 +65,25 @@ pub fn build(b: *std.Build) void {
     );
     test_host_step.dependOn(&run_host_tests.step);
 
-    host_tests.root_module.addImport("utils_module", utils_module);
-    host_tests.root_module.addImport("bridge_module", bridge_module);
+    const cli_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/cli/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+
+    cli_tests.root_module.addImport("library_module", library_module);
+    cli_tests.root_module.addImport("utils_module", utils_module);
+    cli_tests.root_module.addImport("bridge_module", bridge_module);
+
+    const run_cli_tests = b.addRunArtifact(cli_tests);
+
+    const test_cli_step = b.step(
+        "test-cli",
+        "Run CLI tests",
+    );
+    test_cli_step.dependOn(&run_cli_tests.step);
 
     b.installArtifact(music);
     b.installArtifact(native_host);

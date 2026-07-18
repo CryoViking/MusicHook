@@ -218,3 +218,86 @@ test "relays a play request to the extension and its response to the client" {
         client_writer.buffered(),
     );
 }
+
+test "rejects an invalid client request before forwarding it" {
+    const request_json = "{\"command\":\"play\",\"url\":\"\"}";
+
+    const request_frame = try (native_message.NativeMessage{
+        .json_bytes = request_json,
+    }).encode(std.testing.allocator);
+    defer std.testing.allocator.free(request_frame);
+
+    var client_reader = std.Io.Reader.fixed(request_frame);
+    var native_reader = std.Io.Reader.fixed("");
+
+    var client_output_buffer: [256]u8 = undefined;
+    var client_writer = std.Io.Writer.fixed(&client_output_buffer);
+
+    var native_output_buffer: [256]u8 = undefined;
+    var native_writer = std.Io.Writer.fixed(&native_output_buffer);
+
+    try std.testing.expectError(
+        extension_protocol.RequestError.EmptyUrl,
+        relay_one(
+            std.testing.allocator,
+            &client_reader,
+            &client_writer,
+            &native_reader,
+            &native_writer,
+        ),
+    );
+
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        native_writer.buffered().len,
+    );
+}
+
+test "rejects an invalid extension response before returning it to the client" {
+    const request_json =
+        "{\"command\":\"play\",\"url\":\"https://music.youtube.com/watch?v=example\"}";
+
+    const response_json =
+        "{\"status\":\"failed\",\"error_code\":null}";
+
+    const request_frame = try (native_message.NativeMessage{
+        .json_bytes = request_json,
+    }).encode(std.testing.allocator);
+    defer std.testing.allocator.free(request_frame);
+
+    const response_frame = try (native_message.NativeMessage{
+        .json_bytes = response_json,
+    }).encode(std.testing.allocator);
+    defer std.testing.allocator.free(response_frame);
+
+    var client_reader = std.Io.Reader.fixed(request_frame);
+    var native_reader = std.Io.Reader.fixed(response_frame);
+
+    var client_output_buffer: [256]u8 = undefined;
+    var client_writer = std.Io.Writer.fixed(&client_output_buffer);
+
+    var native_output_buffer: [256]u8 = undefined;
+    var native_writer = std.Io.Writer.fixed(&native_output_buffer);
+
+    try std.testing.expectError(
+        extension_protocol.ResponseError.MissingErrorCode,
+        relay_one(
+            std.testing.allocator,
+            &client_reader,
+            &client_writer,
+            &native_reader,
+            &native_writer,
+        ),
+    );
+
+    try std.testing.expectEqualSlices(
+        u8,
+        request_frame,
+        native_writer.buffered(),
+    );
+
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        client_writer.buffered().len,
+    );
+}
