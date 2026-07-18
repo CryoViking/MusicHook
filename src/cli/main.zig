@@ -6,6 +6,9 @@ const music_library = library_module.music_library;
 const config = library_module.config;
 const utils_module = @import("utils_module");
 const utils = utils_module.utils;
+const host_client = @import("host_client.zig");
+const bridge_module = @import("bridge_module");
+const bridge_protocol = bridge_module.protocol;
 
 const PlayTargetKind = union(enum) {
     alias: []const u8,
@@ -17,6 +20,14 @@ const SetupError = error{
     NotInitialized,
     DataDirectoryMissing,
     LibraryMissing,
+};
+
+const ExecutionContext = struct {
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    config_filepath: []const u8,
+    xdg_runtime_dir: ?[]const u8,
+    temp_dir: ?[]const u8,
 };
 
 pub fn main(init: std.process.Init) !u8 {
@@ -38,12 +49,15 @@ pub fn main(init: std.process.Init) !u8 {
         const path = try config_path(allocator, home);
         defer allocator.free(path);
 
-        execute(
-            init.io,
-            init.gpa,
-            path,
-            request,
-        ) catch |err| switch (err) {
+        const context = ExecutionContext{
+            .io = init.io,
+            .allocator = init.gpa,
+            .config_filepath = path,
+            .xdg_runtime_dir = init.environ_map.get("XDG_RUNTIME_DIR"),
+            .temp_dir = init.environ_map.get("TMPDIR"),
+        };
+
+        execute(context, request) catch |err| switch (err) {
             SetupError.NotInitialized => {
                 std.debug.print(
                     "MusicHook has not been initialized, Run `music init` first.\n",
@@ -93,16 +107,14 @@ pub fn main(init: std.process.Init) !u8 {
 }
 
 fn execute(
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    config_filepath: []const u8,
+    context: ExecutionContext,
     request: protocol.Request,
 ) !void {
     switch (request.command) {
         .init => try execute_init(
-            io,
-            allocator,
-            config_filepath,
+            context.io,
+            context.allocator,
+            context.config_filepath,
         ),
         .play => {
             const play_target = request.play_target orelse
@@ -112,22 +124,22 @@ fn execute(
                     execute_handle_unsupported_url(url);
                 },
                 .direct_url => |url| {
-                    execute_play_direct_url(url);
+                    try execute_play_direct_url(context, url);
                 },
                 .alias => |alias| {
                     const cfg = config.Config.load(
-                        io,
-                        allocator,
+                        context.io,
+                        context.allocator,
                         std.Io.Dir.cwd(),
-                        config_filepath,
+                        context.config_filepath,
                     ) catch |err| switch (err) {
                         error.FileNotFound => return SetupError.NotInitialized,
                         else => |other| return other,
                     };
-                    defer cfg.deinit(allocator);
+                    defer cfg.deinit(context.allocator);
 
                     var data_dir = std.Io.Dir.openDirAbsolute(
-                        io,
+                        context.io,
                         cfg.data_path,
                         .{},
                     ) catch |err| switch (err) {
@@ -136,18 +148,18 @@ fn execute(
                         },
                         else => |other| return other,
                     };
-                    defer data_dir.close(io);
+                    defer data_dir.close(context.io);
 
                     const library = music_library.MusicLibrary.load(
-                        io,
-                        allocator,
+                        context.io,
+                        context.allocator,
                         data_dir,
                         "music_library.zon",
                     ) catch |err| switch (err) {
                         error.FileNotFound => return SetupError.LibraryMissing,
                         else => |other| return other,
                     };
-                    defer library.deinit(allocator);
+                    defer library.deinit(context.allocator);
 
                     execute_play_alias(library, alias);
                 },
@@ -281,8 +293,33 @@ fn execute_handle_unsupported_url(url: []const u8) void {
     std.debug.print("Does not supported given url: {s}\n", .{url});
 }
 
-fn execute_play_direct_url(url: []const u8) void {
-    std.debug.print("Would play {s} here\n", .{url});
+fn execute_play_direct_url(context: ExecutionContext, url: []const u8) !void {
+    var client = try host_client.HostClient.connect(
+        context.io,
+        context.allocator,
+        context.xdg_runtime_dir,
+        context.temp_dir,
+    );
+    defer client.deinit();
+
+    const response = try client.send(
+        context.allocator,
+        .{
+            .command = .play,
+            .url = url,
+        },
+    );
+
+    switch (response.status) {
+        .ok => {
+            std.debug.print("Playback started.\n", .{});
+        },
+        .failed => switch (response.error_code.?) {
+            .extension_unavailable => return error.ExtensionUnavailable,
+            .zen_unavailable => return error.ZenUnavailable,
+            .playback_failed => return error.PlaybackFailed,
+        },
+    }
 }
 
 fn execute_play_alias(

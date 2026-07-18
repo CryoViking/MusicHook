@@ -47,6 +47,24 @@ pub fn build(b: *std.Build) void {
     native_host.root_module.addImport("utils_module", utils_module);
     native_host.root_module.addImport("bridge_module", bridge_module);
 
+    const host_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/host/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+
+    const run_host_tests = b.addRunArtifact(host_tests);
+    const test_host_step = b.step(
+        "test-host",
+        "Run native host tests",
+    );
+    test_host_step.dependOn(&run_host_tests.step);
+
+    host_tests.root_module.addImport("utils_module", utils_module);
+    host_tests.root_module.addImport("bridge_module", bridge_module);
+
     b.installArtifact(music);
     b.installArtifact(native_host);
 
