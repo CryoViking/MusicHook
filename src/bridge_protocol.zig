@@ -134,8 +134,62 @@ test "JSON Request decodes successfully" {
         actual_request.value.command,
     );
 
+    try std.testing.expectEqualStrings(expected_request.url, actual_request.value.url);
+}
+
+test "encodes and decodes an ok response" {
+    const response = Response{
+        .status = .ok,
+    };
+
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+
+    try std.json.Stringify.value(response, .{}, &output.writer);
+
     try std.testing.expectEqualStrings(
-        expected_request.url,
-        actual_request.value.url,
+        "{\"status\":\"ok\",\"error_code\":null}",
+        output.written(),
     );
+
+    var parsed = try std.json.parseFromSlice(
+        Response,
+        std.testing.allocator,
+        output.written(),
+        .{},
+    );
+    defer parsed.deinit();
+
+    try parsed.value.validate();
+    try std.testing.expectEqual(response.status, parsed.value.status);
+    try std.testing.expectEqual(response.error_code, parsed.value.error_code);
+}
+
+test "encodes and decodes a failed response" {
+    const response = Response{
+        .status = .failed,
+        .error_code = .zen_unavailable,
+    };
+
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+
+    try std.json.Stringify.value(response, .{}, &output.writer);
+
+    try std.testing.expectEqualStrings(
+        "{\"status\":\"failed\",\"error_code\":\"zen_unavailable\"}",
+        output.written(),
+    );
+
+    var parsed = try std.json.parseFromSlice(
+        Response,
+        std.testing.allocator,
+        output.written(),
+        .{},
+    );
+    defer parsed.deinit();
+
+    try parsed.value.validate();
+    try std.testing.expectEqual(response.status, parsed.value.status);
+    try std.testing.expectEqual(response.error_code, parsed.value.error_code);
 }
