@@ -1,6 +1,7 @@
 const std = @import("std");
-const native_message = @import("native_message.zig");
-const extension_protocol = @import("extension_protocol.zig");
+const bridge_module = @import("bridge_module");
+const native_message = bridge_module.frame;
+const extension_protocol = bridge_module.protocol;
 const utils_module = @import("utils_module");
 const utils = utils_module.utils;
 

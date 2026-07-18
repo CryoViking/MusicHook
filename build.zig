@@ -16,6 +16,12 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const bridge_module = b.createModule(.{
+        .root_source_file = b.path("src/bridge_module/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const music = b.addExecutable(.{
         .name = "music",
         .root_module = b.createModule(.{
@@ -27,6 +33,7 @@ pub fn build(b: *std.Build) void {
 
     music.root_module.addImport("library_module", library_module);
     music.root_module.addImport("utils_module", utils_module);
+    music.root_module.addImport("bridge_module", bridge_module);
 
     const native_host = b.addExecutable(.{
         .name = "music-hook-host",
@@ -38,6 +45,7 @@ pub fn build(b: *std.Build) void {
     });
 
     native_host.root_module.addImport("utils_module", utils_module);
+    native_host.root_module.addImport("bridge_module", bridge_module);
 
     b.installArtifact(music);
     b.installArtifact(native_host);
