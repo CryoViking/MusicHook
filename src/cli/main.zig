@@ -1,8 +1,11 @@
 const std = @import("std");
 const cli = @import("cli.zig");
 const protocol = @import("protocol.zig");
-const music_library = @import("music_library.zig");
-const config = @import("config.zig");
+const library_module = @import("library_module");
+const music_library = library_module.music_library;
+const config = library_module.config;
+const utils_module = @import("utils_module");
+const utils = utils_module.utils;
 
 const PlayTargetKind = union(enum) {
     alias: []const u8,
