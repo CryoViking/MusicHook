@@ -33,6 +33,7 @@ pub fn main(init: std.process.Init) !u8 {
     );
     defer socket_dir.close(io);
 
+    try remove_stale_socket(io, socket_path);
     const socket_address = try std.Io.net.UnixAddress.init(socket_path);
     var listener = try socket_address.listen(io, .{});
     defer {
@@ -58,6 +59,19 @@ pub fn main(init: std.process.Init) !u8 {
             &native_writer.interface,
         );
     }
+}
+
+fn remove_stale_socket(
+    io: std.Io,
+    socket_path: []const u8,
+) !void {
+    std.Io.Dir.deleteFileAbsolute(
+        io,
+        socket_path,
+    ) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    };
 }
 
 fn relay_one(
@@ -300,4 +314,50 @@ test "rejects an invalid extension response before returning it to the client" {
         @as(usize, 0),
         client_writer.buffered().len,
     );
+}
+
+test "removes a stale Unix socket before listening" {
+    var temp_dir = std.testing.tmpDir(.{});
+    defer temp_dir.cleanup();
+
+    var runtime_dir_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const runtime_dir_length = try temp_dir.dir.realPath(
+        std.testing.io,
+        &runtime_dir_buffer,
+    );
+
+    const socket_path = try utils.runtime_socket_path(
+        std.testing.allocator,
+        null,
+        runtime_dir_buffer[0..runtime_dir_length],
+    );
+    defer std.testing.allocator.free(socket_path);
+
+    var socket_dir = try temp_dir.dir.createDirPathOpen(
+        std.testing.io,
+        "music_hook",
+        .{
+            .permissions = .fromMode(0o700),
+        },
+    );
+    socket_dir.close(std.testing.io);
+
+    const socket_address = try std.Io.net.UnixAddress.init(socket_path);
+
+    var stale_listener = try socket_address.listen(
+        std.testing.io,
+        .{},
+    );
+    stale_listener.deinit(std.testing.io);
+
+    try remove_stale_socket(std.testing.io, socket_path);
+
+    var listener = try socket_address.listen(
+        std.testing.io,
+        .{},
+    );
+    defer {
+        listener.deinit(std.testing.io);
+        std.Io.Dir.deleteFileAbsolute(std.testing.io, socket_path) catch {};
+    }
 }

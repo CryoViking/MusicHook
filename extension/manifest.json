@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "MusicHook",
+  "version": "0.1.0",
+  "description": "Local CLI bridge forst starting focused music in Zen.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "@music-hook.automatacrypt"
+    }
+  },
+  "background": {
+    "scripts": [
+      "background.js"
+    ]
+  },
+  "permissions": [
+    "nativeMessaging"
+  ],
+  "host_permissions": [
+    "https://music.youtube.com/*",
+    "https://www.youtube.com/*"
+  ]
+}
