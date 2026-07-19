@@ -11,13 +11,13 @@ pub const FakeHost = struct {
     socket_path: []u8,
     listener: std.Io.net.Server,
     response_frame: []u8,
-    expected_url: []const u8,
+    expected_request: bridge_protocol.Request,
     thread: ?std.Thread = null,
     err: ?anyerror = null,
 
     pub fn start(
         response_json: []const u8,
-        expected_url: []const u8,
+        expected_request: bridge_protocol.Request,
     ) !*FakeHost {
         var temp_dir = std.testing.tmpDir(.{});
         errdefer temp_dir.cleanup();
@@ -74,7 +74,7 @@ pub const FakeHost = struct {
             .socket_path = socket_path,
             .listener = listener,
             .response_frame = response_frame,
-            .expected_url = expected_url,
+            .expected_request = expected_request,
         };
 
         self.thread = try std.Thread.spawn(
@@ -147,13 +147,18 @@ pub const FakeHost = struct {
 
         try parsed_request.value.validate();
         try std.testing.expectEqual(
-            bridge_protocol.Command.play,
+            self.expected_request.command,
             parsed_request.value.command,
         );
-        try std.testing.expectEqualStrings(
-            self.expected_url,
-            parsed_request.value.url,
-        );
+        switch (self.expected_request.command) {
+            .play => try std.testing.expectEqualStrings(
+                self.expected_request.url.?,
+                parsed_request.value.url.?,
+            ),
+            .pause, .@"resume" => try std.testing.expect(
+                parsed_request.value.url == null,
+            ),
+        }
 
         var output_buffer: [1024]u8 = undefined;
         var writer = client.writer(std.testing.io, &output_buffer);

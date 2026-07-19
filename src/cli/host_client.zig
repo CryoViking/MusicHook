@@ -98,7 +98,7 @@ test "HostClient sends a play request over a Unix socket and receives a response
 
     var fake_host = try test_support.FakeHost.start(
         "{\"status\":\"ok\",\"error_code\":null}",
-        expected_url,
+        .{ .command = .play, .url = expected_url },
     );
     defer fake_host.deinit();
 
@@ -133,7 +133,7 @@ test "HostClient returns a failed response from the host" {
 
     var fake_host = try test_support.FakeHost.start(
         "{\"status\":\"failed\",\"error_code\":\"zen_unavailable\"}",
-        expected_url,
+        .{ .command = .play, .url = expected_url },
     );
     defer fake_host.deinit();
 
@@ -168,7 +168,7 @@ test "HostClient rejects a failed response without an error code" {
 
     var fake_host = try test_support.FakeHost.start(
         "{\"status\":\"failed\",\"error_code\":null}",
-        expected_url,
+        .{ .command = .play, .url = expected_url },
     );
     defer fake_host.deinit();
 
@@ -197,7 +197,7 @@ test "HostClient rejects invalid JSON from the host" {
 
     var fake_host = try test_support.FakeHost.start(
         "{not json}",
-        expected_url,
+        .{ .command = .play, .url = expected_url },
     );
     defer fake_host.deinit();
 

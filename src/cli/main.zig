@@ -168,6 +168,14 @@ fn execute(
                 },
             }
         },
+        .pause => {
+            try execute_playback_command(context, .pause);
+            std.debug.print("Playback paused.\n", .{});
+        },
+        .@"resume" => {
+            try execute_playback_command(context, .@"resume");
+            std.debug.print("Playback resumed.\n", .{});
+        },
         else => stub(),
     }
 }
@@ -176,7 +184,6 @@ fn stub() void {
     std.debug.print("Stubbed command, doesn't exist yet\n", .{});
 }
 
-// SECTION: 'init' subcommand
 fn execute_init(
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -291,9 +298,37 @@ fn init_default_data_path(
     return allocator.dupe(u8, existing_cfg.data_path);
 }
 
-// SECTION: 'play' subcommand
 fn execute_handle_unsupported_url(url: []const u8) void {
     std.debug.print("Does not supported given url: {s}\n", .{url});
+}
+
+fn execute_playback_command(
+    context: ExecutionContext,
+    command: bridge_protocol.Command,
+) !void {
+    var client = try host_client.HostClient.connect(
+        context.io,
+        context.allocator,
+        context.xdg_runtime_dir,
+        context.temp_dir,
+    );
+    defer client.deinit();
+
+    const response = try client.send(
+        context.allocator,
+        .{
+            .command = command,
+        },
+    );
+
+    switch (response.status) {
+        .ok => {},
+        .failed => switch (response.error_code.?) {
+            .extension_unavailable => return error.ExtensionUnavailable,
+            .zen_unavailable => return error.ZenUnavailable,
+            .playback_failed => return error.PlaybackFailed,
+        },
+    }
 }
 
 fn execute_play_direct_url(context: ExecutionContext, url: []const u8) !void {
@@ -584,7 +619,7 @@ test "direct URL play succeeds when the host returns ok" {
 
     var fake_host = try test_support.FakeHost.start(
         "{\"status\":\"ok\",\"error_code\":null}",
-        expected_url,
+        .{ .command = .play, .url = expected_url },
     );
     defer fake_host.deinit();
 
@@ -607,7 +642,7 @@ test "direct URL play maps zen_unavailable to a CLI error" {
 
     var fake_host = try test_support.FakeHost.start(
         "{\"status\":\"failed\",\"error_code\":\"zen_unavailable\"}",
-        expected_url,
+        .{ .command = .play, .url = expected_url },
     );
     defer fake_host.deinit();
 
@@ -633,7 +668,7 @@ test "direct URL play maps extension_unavailable to a CLI error" {
 
     var fake_host = try test_support.FakeHost.start(
         "{\"status\":\"failed\",\"error_code\":\"extension_unavailable\"}",
-        expected_url,
+        .{ .command = .play, .url = expected_url },
     );
     defer fake_host.deinit();
 
@@ -659,7 +694,7 @@ test "direct URL play maps playback_failed to a CLI error" {
 
     var fake_host = try test_support.FakeHost.start(
         "{\"status\":\"failed\",\"error_code\":\"playback_failed\"}",
-        expected_url,
+        .{ .command = .play, .url = expected_url },
     );
     defer fake_host.deinit();
 
@@ -674,6 +709,69 @@ test "direct URL play maps playback_failed to a CLI error" {
     try std.testing.expectError(
         error.PlaybackFailed,
         execute_play_direct_url(context, expected_url),
+    );
+
+    try fake_host.join();
+}
+
+test "pause succeeds when the host returns ok" {
+    var fake_host = try test_support.FakeHost.start(
+        "{\"status\":\"ok\",\"error_code\":null}",
+        .{ .command = .pause },
+    );
+    defer fake_host.deinit();
+
+    const context = ExecutionContext{
+        .io = std.testing.io,
+        .allocator = std.testing.allocator,
+        .config_filepath = "",
+        .xdg_runtime_dir = null,
+        .temp_dir = fake_host.runtime_dir,
+    };
+
+    try execute_playback_command(context, .pause);
+
+    try fake_host.join();
+}
+
+test "resume succeeds when the host returns ok" {
+    var fake_host = try test_support.FakeHost.start(
+        "{\"status\":\"ok\",\"error_code\":null}",
+        .{ .command = .@"resume" },
+    );
+    defer fake_host.deinit();
+
+    const context = ExecutionContext{
+        .io = std.testing.io,
+        .allocator = std.testing.allocator,
+        .config_filepath = "",
+        .xdg_runtime_dir = null,
+        .temp_dir = fake_host.runtime_dir,
+    };
+
+    try execute_playback_command(context, .@"resume");
+
+    try fake_host.join();
+}
+
+test "pause maps playback_failed to a CLI error" {
+    var fake_host = try test_support.FakeHost.start(
+        "{\"status\":\"failed\",\"error_code\":\"playback_failed\"}",
+        .{ .command = .pause },
+    );
+    defer fake_host.deinit();
+
+    const context = ExecutionContext{
+        .io = std.testing.io,
+        .allocator = std.testing.allocator,
+        .config_filepath = "",
+        .xdg_runtime_dir = null,
+        .temp_dir = fake_host.runtime_dir,
+    };
+
+    try std.testing.expectError(
+        error.PlaybackFailed,
+        execute_playback_command(context, .pause),
     );
 
     try fake_host.join();

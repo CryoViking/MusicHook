@@ -18,6 +18,20 @@
   ],
   "host_permissions": [
     "https://music.youtube.com/*",
-    "https://www.youtube.com/*"
+    "https://www.youtube.com/*",
+    "https://youtube.com/*"
+  ],
+  "content_scripts":[
+    {
+      "matches": [
+        "https://music.youtube.com/*",
+        "https://www.youtube.com/*",
+        "https://youtube.com/*"
+      ],
+      "js":[
+        "content.js"
+      ],
+      "run_at": "document_start"
+    }
   ]
 }

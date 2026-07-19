@@ -2,18 +2,31 @@ const std = @import("std");
 
 pub const Command = enum {
     play,
+    pause,
+    @"resume",
 };
 
+//   Get the specified package
 pub const RequestError = error{
+    MissingUrl,
     EmptyUrl,
+    UnexpectedUrl,
 };
 
 pub const Request = struct {
     command: Command,
-    url: []const u8,
+    url: ?[]const u8 = null,
 
     pub fn validate(self: Request) RequestError!void {
-        if (self.url.len == 0) return RequestError.EmptyUrl;
+        switch (self.command) {
+            .play => {
+                const url = self.url orelse return error.MissingUrl;
+                if (url.len == 0) return RequestError.EmptyUrl;
+            },
+            .pause, .@"resume" => {
+                if (self.url != null) return error.UnexpectedUrl;
+            },
+        }
     }
 };
 
@@ -49,25 +62,77 @@ pub const Response = struct {
     }
 };
 
-test "play request acceps a URL" {
+test "play request accepts a URL" {
     const request = Request{
         .command = .play,
         .url = "https://music.youtube.com/watch?v=example",
     };
+
     try request.validate();
 }
 
-test "play request acceps rejects an empty URL" {
+test "play request rejects a missing URL" {
+    const request = Request{
+        .command = .play,
+    };
+
+    try std.testing.expectError(
+        RequestError.MissingUrl,
+        request.validate(),
+    );
+}
+
+test "play request rejects an empty URL" {
     const request = Request{
         .command = .play,
         .url = "",
     };
+
     try std.testing.expectError(
         RequestError.EmptyUrl,
         request.validate(),
     );
 }
 
+test "pause request accepts no URL" {
+    const request = Request{
+        .command = .pause,
+    };
+
+    try request.validate();
+}
+
+test "resume request accepts no URL" {
+    const request = Request{
+        .command = .@"resume",
+    };
+
+    try request.validate();
+}
+
+test "pause request rejects a URL" {
+    const request = Request{
+        .command = .pause,
+        .url = "https://music.youtube.com/watch?v=example",
+    };
+
+    try std.testing.expectError(
+        RequestError.UnexpectedUrl,
+        request.validate(),
+    );
+}
+
+test "resume request rejects a URL" {
+    const request = Request{
+        .command = .@"resume",
+        .url = "https://music.youtube.com/watch?v=example",
+    };
+
+    try std.testing.expectError(
+        RequestError.UnexpectedUrl,
+        request.validate(),
+    );
+}
 test "failed response requires an error code" {
     const response = Response{
         .status = .failed,
@@ -134,7 +199,10 @@ test "JSON Request decodes successfully" {
         actual_request.value.command,
     );
 
-    try std.testing.expectEqualStrings(expected_request.url, actual_request.value.url);
+    try std.testing.expectEqualStrings(
+        expected_request.url.?,
+        actual_request.value.url.?,
+    );
 }
 
 test "encodes and decodes an ok response" {
@@ -192,4 +260,45 @@ test "encodes and decodes a failed response" {
     try parsed.value.validate();
     try std.testing.expectEqual(response.status, parsed.value.status);
     try std.testing.expectEqual(response.error_code, parsed.value.error_code);
+}
+
+test "pause request encodes as JSON" {
+    var output = std.Io.Writer.Allocating.init(
+        std.testing.allocator,
+    );
+    defer output.deinit();
+
+    const request = Request{
+        .command = .pause,
+    };
+
+    try std.json.Stringify.value(
+        request,
+        .{},
+        &output.writer,
+    );
+
+    try std.testing.expectEqualStrings(
+        "{\"command\":\"pause\",\"url\":null}",
+        output.written(),
+    );
+}
+
+test "JSON pause Request decodes successfully" {
+    const payload = "{\"command\":\"pause\",\"url\":null}";
+
+    const request = try std.json.parseFromSlice(
+        Request,
+        std.testing.allocator,
+        payload,
+        .{},
+    );
+    defer request.deinit();
+
+    try std.testing.expectEqual(
+        Command.pause,
+        request.value.command,
+    );
+    try std.testing.expect(request.value.url == null);
+    try request.value.validate();
 }
