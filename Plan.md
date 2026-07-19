@@ -1,149 +1,123 @@
 # MusicHook
 
-A local-first CLI and Zen extension for starting focus music without opening YouTube’s distraction labyrinth.
+MusicHook is a local-first CLI for starting known favourite YouTube and YouTube Music targets in an already-open Zen browser, without manually navigating into YouTube's distraction labyrinth.
 
-## Goal
+It is deliberately a small launcher, not a replacement YouTube library or media player.
 
-From the terminal, start a named YouTube Music or YouTube target in an existing Zen favourite/pinned tab—without focusing Zen. A target can be a playlist or a single playable track of any length, including a long-form mix.
+## Product boundary
 
-```sh
-music play dusk
-music play longform
-music sync
-music list
-```
+The user keeps a small, manually curated collection of favourites in their head and in a local ZON library. MusicHook makes those favourites quick to start, change, pause, or resume from the terminal.
 
-The CLI is for beginning a work session. Once I deliberately open Zen and control music manually, MusicHook must leave the session alone.
+Once the user deliberately opens Zen and takes over playback manually, MusicHook leaves the session alone.
 
-## Principles
-
-- Local-only; never publicly distributed.
-- No browser focus or window switching during normal commands.
-- No Google credentials or browser cookies exposed to the CLI.
-- Target aliases and configuration belong to the CLI.
-- The Zen extension is a minimal bridge and page controller.
-- Support both music.youtube.com and www.youtube.com.
-- Prefer existing Zen favourite/pinned tabs; only open/reload the configured playlist tab when necessary.
-- Keep permissions and accepted commands minimal.
+Supported playable targets are YouTube and YouTube Music URLs. A single track, playlist, or long-form mix is simply a playable target; duration is not a separate type.
 
 ## Architecture
 
+```text
 music CLI
   ↕ Unix-domain socket
-MusicHook native host (Zig)
+music-hook-host
   ↕ Firefox native messaging
-Zen extension (JavaScript)
-  ↕ content scripts
-YouTube Music / YouTube favourite tabs
+Zen extension
+  ↕ content script
+YouTube Music / YouTube tabs
+```
 
-The native host is long-lived while Zen is running. It relays requests and replies between the CLI and extension.
+- `music` is the CLI binary.
+- `music-hook-host` is a separate native-messaging host binary.
+- The host is a deliberately simple serial relay: one framed request from the CLI, one framed request to the extension, one validated response back to the CLI.
+- The Unix socket path is runtime state, not configuration: prefer an absolute `$XDG_RUNTIME_DIR/music_hook/host.sock`, otherwise an absolute `$TMPDIR/music_hook/host.sock`.
+- The extension prefers a matching pinned/favourite tab, then the first eligible tab. It does not focus Zen during normal playback commands.
 
-## Initial Commands
+## Current commands
 
 ```sh
-music sync [youtube|ytmusic]
-music list
-music play <alias>
+music init
+music add <alias> <YouTube URL>
+music remove <alias>
+music play <alias-or-YouTube-URL>
 music pause
 music resume
-music status
-music alias set <alias> <url>
-music alias remove <alias>
 ```
 
-Example configuration:
+`music add` checks for an alias conflict before making any metadata request. It resolves the supplied public URL, stores the discovered title plus source and kind metadata, then writes the target to the local library.
 
+Missing aliases are normal not-found results, not errors.
+
+## Completed work
+
+- Shared native-message framing and validated bridge request/response protocol.
+- Unix-socket CLI client and native-host serial relay, including focused integration tests.
+- Zen/Firefox extension installation tooling and native-messaging bridge.
+- Direct URL playback, pause, and resume through the extension.
+- Tab selection that distinguishes YouTube from YouTube Music and prefers pinned/favourite eligible tabs.
+- Local ZON configuration and library creation through `music init`.
+- Local target add/remove operations with duplicate-alias protection and manually inspectable ZON output.
+- Metadata resolution through a public request to the supplied URL, using Open Graph title metadata; no Google credentials or browser cookies are exposed to the CLI.
+- Alias playback: resolve a locally stored target, then reuse the normal host/extension playback path.
+- Repeatable Fish smoke-test helpers using an ignored `.test-home` and a deliberate public `test_alias` fixture.
+
+## Next smallest step: `music list`
+
+`music list` is the last intended local-library command for this first finished shape.
+
+```text
+load config
+→ open local library
+→ print known aliases, titles, sources, kinds, and URLs
 ```
-[targets.dusk]
-title = "Dusk Focus"
-kind = "playlist"
-source = "ytmusic"
-url = "https://music.youtube.com/playlist?list=..."
 
-[targets.longform]
-title = "Long-form Mix"
-kind = "track"
-source = "youtube"
-url = "https://www.youtube.com/watch?v=..."
+It requires no browser, extension, API, or network access. It is an occasional inspection tool, not a browsing or discovery interface.
+
+## Deferred: `music doctor`
+
+`doctor` is a diagnostic command, not a playback-state query. It should eventually report independent checks clearly, without changing playback:
+
+```text
+config:       config.zon exists, parses, and validates
+data library: configured directory exists and is usable
+library file: music_library.zon exists, parses, and validates
+native bridge: host can round-trip a harmless request through the extension
 ```
 
-`kind` is local metadata for later browsing and filtering. A long-form mix is a `track`; it differs from another track only in duration.
+When a prerequisite fails, dependent checks should say `skipped` rather than inventing secondary failures. For example, a missing data directory means the library-file check is skipped.
 
-## Product Milestones
+The native-bridge check must prove the host ↔ extension native-messaging connection, not merely that the CLI can connect to a Unix socket. It should not require a playable tab or report a missing YouTube tab as a doctor failure.
 
-1. **Core play bridge.** Build the CLI, native host, and Zen extension path so `music play <alias>` can start an existing target without focusing Zen.
-2. **Local target configuration.** Store manually added playlist and track targets locally with a stable alias, title, kind, source, and canonical URL or ID. The alias may match the title, but the stored identity remains stable when titles are renamed or duplicated.
-3. **Extension queue.** Let the extension queue the current YouTube or YouTube Music target for later import, persisting the candidate until the native host acknowledges it.
-4. **Sync import and deduplication.** Extend `music sync` to import queued candidates and discover visible library playlists, generate or request a local alias, and deduplicate by canonical URL or ID without overwriting an existing target.
+The existing placeholder `status` command should be renamed to `doctor` when this work begins.
 
-## Implementation Phases
+## Deferred: playlist smoke testing
 
-### 1. Define the protocol
+Manual smoke tests should later confirm that a stored playlist URL plays correctly through the extension. This is verification work, not a reason to create a separate playlist architecture.
 
-- Define JSON request/response messages.
-- Define error messages for Zen closed, extension unavailable, missing playlist, and playback failure.
-- Keep commands explicit: play, pause, resume, status, sync.
+## Remove `sync` now
 
-### 2. Zig CLI
+Remove the current unimplemented `sync` command from the parser, CLI protocol, and command dispatch. It does not belong to the first product boundary and should not remain as a misleading placeholder.
 
-- Implement command parsing.
-- Read/write local target configuration.
-- Connect to the Unix socket, send one request, print one response, exit.
-- Begin with synchronous request/response handling.
+## Possible future learning exercise: OAuth-backed sync
 
-### 3. Zig native host
+An opt-in future sync feature could be worthwhile as a learning project, not as a current product requirement. It would explore how a native local application safely integrates with a user-owned remote service, including:
 
-- Implement Firefox native-messaging framing over stdin/stdout.
-- Create a user-only Unix socket.
-- Relay messages between CLI and extension.
-- Use a small poll() event loop only when multiplexing is needed.
-- Restrict socket and state directories to the current user.
+- OAuth 2.0 consent and scope design.
+- Authorization Code flow with PKCE for a local CLI application.
+- Browser-based authorization and redirect/callback handling.
+- Short-lived access tokens, refresh tokens, expiry, and revocation.
+- Safe local token storage, preferably using an operating-system credential store rather than ZON or source control.
+- YouTube Data API request design, pagination, quotas, and explicit error handling.
+- A clear distinction between importing candidates and automatically changing the curated local library.
 
-### 4. Zen extension
+If this is ever attempted, it must remain explicitly opt-in, request the minimum scope, never log tokens, and never turn MusicHook into a full mirror of the user's YouTube library.
 
-- Fixed extension ID.
-- Native-messaging connection maintained by the background script.
-- Content scripts limited to:
-    - https://music.youtube.com/*
-    - https://www.youtube.com/*
+## Non-goals
 
-- Locate existing matching favourite/pinned tabs without activating them.
-- Play, pause, resume, report status.
-- Maintain separate page-control logic for YouTube Music and normal YouTube.
-
-### 5. Target synchronisation and queue import
-
-- Visit or reuse each service’s playlist-library page in a background tab.
-- Extract playlist names and canonical URLs.
-- Queue the current target from the extension for later import.
-- Persist queued candidates until the native host acknowledges import.
-- Return discovered and queued targets to the CLI for local alias management.
-- Deduplicate imports by canonical URL or ID; never overwrite an existing target alias automatically.
-- Treat DOM scraping as replaceable, since YouTube may alter its UI.
-
-### 6. Installation and persistence
-
-- Package the extension as a private, unlisted Mozilla-signed XPI.
-- Install the native-messaging manifest for the current user.
-- Build the Zig binary locally on each machine.
-- Document installation and uninstall steps.
-
-## Security Boundaries
-
-- Native host allowlists only MusicHook’s extension ID.
-- Unix socket is accessible only by the current user.
-- Extension permissions are limited to YouTube and YouTube Music.
-- CLI accepts only a small validated command schema.
-- Never log cookies, OAuth tokens, browser history, or unrelated tab URLs.
-
-## Non-Goals
-
-- Replacing YouTube Music or building a full media player.
-- Managing queues after the initial playlist starts.
-- Preventing deliberate manual browsing or music changes.
-- Synchronising configuration between machines automatically.
+- A complete YouTube or YouTube Music library manager.
+- Recommendation, discovery, or browsing features.
 - General-purpose browser automation.
+- Queueing, cancellation, resynchronisation, or distributed-systems complexity in the native host.
+- Automatically synchronising configuration between machines.
+- Requiring Google credentials for normal add, remove, list, play, pause, or resume use.
 
-## Definition of Done
+## Definition of done for the first version
 
-music play <alias> starts the configured target in its existing Zen favourite/pinned tab, without bringing Zen forward; errors are clear; and manual control in Zen remains entirely uninterrupted.
+The user can initialise a local library, add and remove known favourites, list them, and play a direct URL or stored alias through an existing Zen tab. Pause and resume work through the same bridge. Errors are clear, browser focus is not stolen, and the tool remains small enough to support focused work rather than becoming another place to browse.
