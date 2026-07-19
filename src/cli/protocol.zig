@@ -10,46 +10,88 @@ pub const Command = enum {
     sync,
     list,
     play,
+    add,
+    remove,
     pause,
     @"resume",
     status,
 };
 
-pub const Request = struct {
-    command: Command,
-    play_target: ?[]const u8 = null,
-
-    pub fn validate(self: Request) ProtocolError!void {
-        switch (self.command) {
-            .play => if (self.play_target == null) return error.MissingPlayTarget,
-            else => if (self.play_target != null) return error.UnexpectedPlayTarget,
-        }
-    }
+pub const AddRequest = struct {
+    alias: []const u8,
+    url: []const u8,
 };
 
-test "play requires an play_target" {
-    const request = Request{ .command = .play };
-    try std.testing.expectError(
-        error.MissingPlayTarget,
-        request.validate(),
-    );
+pub const Request = union(Command) {
+    init: void,
+    sync: void,
+    list: void,
+    play: []const u8,
+    add: AddRequest,
+    remove: []const u8,
+    pause: void,
+    @"resume": void,
+    status: void,
+};
+
+test "play request stores its target" {
+    const request = Request{
+        .play = "dusk",
+    };
+
+    switch (request) {
+        .play => |target| try std.testing.expectEqualStrings(
+            "dusk",
+            target,
+        ),
+        else => unreachable,
+    }
 }
 
-test "pause does not accept an play_target" {
+test "add request stores its alias and URL" {
     const request = Request{
-        .command = .pause,
-        .play_target = "dusk",
+        .add = .{
+            .alias = "dusk",
+            .url = "https://music.youtube.com/watch?v=example",
+        },
     };
-    try std.testing.expectError(
-        error.UnexpectedPlayTarget,
-        request.validate(),
-    );
+
+    switch (request) {
+        .add => |target| {
+            try std.testing.expectEqualStrings(
+                "dusk",
+                target.alias,
+            );
+            try std.testing.expectEqualStrings(
+                "https://music.youtube.com/watch?v=example",
+                target.url,
+            );
+        },
+        else => unreachable,
+    }
 }
 
-test "play accepts an play_target" {
+test "remove request stores its alias" {
     const request = Request{
-        .command = .play,
-        .play_target = "dusk",
+        .remove = "dusk",
     };
-    try request.validate();
+
+    switch (request) {
+        .remove => |alias| try std.testing.expectEqualStrings(
+            "dusk",
+            alias,
+        ),
+        else => unreachable,
+    }
+}
+
+test "pause request has no payload" {
+    const request = Request{
+        .pause = {},
+    };
+
+    switch (request) {
+        .pause => {},
+        else => unreachable,
+    }
 }
