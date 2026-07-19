@@ -29,6 +29,11 @@ const AddError = error{
     AliasAlreadyExists,
 };
 
+const RemoveResult = enum {
+    removed,
+    not_found,
+};
+
 const ExecutionContext = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -190,7 +195,16 @@ fn execute(
         .add => |add_request| {
             try execute_add(context, add_request);
         },
-        .remove => stub(),
+        .remove => |alias| {
+            switch (try execute_remove(context, alias)) {
+                .removed => {
+                    std.debug.print("Removed alias: {s}\n", .{alias});
+                },
+                .not_found => {
+                    std.debug.print("Alias not found: {s}\n", .{alias});
+                },
+            }
+        },
         .pause => {
             try execute_playback_command(context, .pause);
             std.debug.print("Playback paused.\n", .{});
@@ -466,6 +480,52 @@ fn execute_add(
             resolved.target.title,
         },
     );
+}
+
+fn execute_remove(context: ExecutionContext, alias: []const u8) !RemoveResult {
+    const cfg = config.Config.load(
+        context.io,
+        context.allocator,
+        std.Io.Dir.cwd(),
+        context.config_filepath,
+    ) catch |err| switch (err) {
+        error.FileNotFound => return SetupError.NotInitialized,
+        else => |other| return other,
+    };
+    defer cfg.deinit(context.allocator);
+
+    var data_dir = std.Io.Dir.openDirAbsolute(
+        context.io,
+        cfg.data_path,
+        .{},
+    ) catch |err| switch (err) {
+        error.FileNotFound, error.NotDir => {
+            return SetupError.DataDirectoryMissing;
+        },
+        else => |other| return other,
+    };
+    defer data_dir.close(context.io);
+
+    const library = music_library.MusicLibrary.load(
+        context.io,
+        context.allocator,
+        data_dir,
+        "music_library.zon",
+    ) catch |err| switch (err) {
+        error.FileNotFound => return SetupError.LibraryMissing,
+        else => |other| return other,
+    };
+    defer library.deinit(context.allocator);
+
+    const removed = try library.remove(
+        context.io,
+        context.allocator,
+        data_dir,
+        "music_library.zon",
+        alias,
+    );
+
+    return if (removed) .removed else .not_found;
 }
 
 fn config_path(
@@ -932,4 +992,156 @@ test "add rejects an existing alias before resolving its URL" {
             .url = "https://example.com/not-used",
         }),
     );
+}
+
+test "remove deletes an existing alias" {
+    var temp_dir = std.testing.tmpDir(.{});
+    defer temp_dir.cleanup();
+
+    var data_path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const data_path_length = try temp_dir.dir.realPath(
+        std.testing.io,
+        &data_path_buffer,
+    );
+
+    const data_path = try std.testing.allocator.dupe(
+        u8,
+        data_path_buffer[0..data_path_length],
+    );
+    defer std.testing.allocator.free(data_path);
+
+    const config_filepath = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ data_path, "config.zon" },
+    );
+    defer std.testing.allocator.free(config_filepath);
+
+    const cfg = config.Config{ .data_path = data_path };
+    try cfg.write_new(
+        std.testing.io,
+        std.testing.allocator,
+        std.Io.Dir.cwd(),
+        config_filepath,
+    );
+
+    const initial_library = music_library.MusicLibrary{
+        .targets = &.{
+            .{
+                .alias = "dusk",
+                .title = "Dusk Focus",
+                .kind = .playlist,
+                .source = .ytmusic,
+                .url = "https://music.youtube.com/playlist?list=example",
+            },
+            .{
+                .alias = "dawn",
+                .title = "Dawn Focus",
+                .kind = .track,
+                .source = .youtube,
+                .url = "https://www.youtube.com/watch?v=example",
+            },
+        },
+    };
+
+    try initial_library.write_new(
+        std.testing.io,
+        std.testing.allocator,
+        temp_dir.dir,
+        "music_library.zon",
+    );
+
+    const context = ExecutionContext{
+        .io = std.testing.io,
+        .allocator = std.testing.allocator,
+        .config_filepath = config_filepath,
+        .xdg_runtime_dir = null,
+        .temp_dir = null,
+    };
+
+    try std.testing.expectEqual(
+        RemoveResult.removed,
+        try execute_remove(context, "dawn"),
+    );
+
+    const updated = try music_library.MusicLibrary.load(
+        std.testing.io,
+        std.testing.allocator,
+        temp_dir.dir,
+        "music_library.zon",
+    );
+    defer updated.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), updated.targets.len);
+    try std.testing.expectEqualStrings("dusk", updated.targets[0].alias);
+}
+
+test "remove leaves the library unchanged for a missing alias" {
+    var temp_dir = std.testing.tmpDir(.{});
+    defer temp_dir.cleanup();
+
+    var data_path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const data_path_length = try temp_dir.dir.realPath(
+        std.testing.io,
+        &data_path_buffer,
+    );
+
+    const data_path = try std.testing.allocator.dupe(
+        u8,
+        data_path_buffer[0..data_path_length],
+    );
+    defer std.testing.allocator.free(data_path);
+
+    const config_filepath = try std.fs.path.join(std.testing.allocator, &.{ data_path, "config.zon" });
+    defer std.testing.allocator.free(config_filepath);
+
+    const cfg = config.Config{ .data_path = data_path };
+    try cfg.write_new(
+        std.testing.io,
+        std.testing.allocator,
+        std.Io.Dir.cwd(),
+        config_filepath,
+    );
+
+    const initial_library = music_library.MusicLibrary{
+        .targets = &.{
+            .{
+                .alias = "dusk",
+                .title = "Dusk Focus",
+                .kind = .playlist,
+                .source = .ytmusic,
+                .url = "https://music.youtube.com/playlist?list=example",
+            },
+        },
+    };
+
+    try initial_library.write_new(
+        std.testing.io,
+        std.testing.allocator,
+        temp_dir.dir,
+        "music_library.zon",
+    );
+
+    const context = ExecutionContext{
+        .io = std.testing.io,
+        .allocator = std.testing.allocator,
+        .config_filepath = config_filepath,
+        .xdg_runtime_dir = null,
+        .temp_dir = null,
+    };
+
+    try std.testing.expectEqual(
+        RemoveResult.not_found,
+        try execute_remove(context, "dawn"),
+    );
+
+    const unchanged = try music_library.MusicLibrary.load(
+        std.testing.io,
+        std.testing.allocator,
+        temp_dir.dir,
+        "music_library.zon",
+    );
+    defer unchanged.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), unchanged.targets.len);
+    try std.testing.expectEqualStrings("dusk", unchanged.targets[0].alias);
 }
