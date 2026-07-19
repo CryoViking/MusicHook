@@ -116,6 +116,60 @@ pub const MusicLibrary = struct {
         });
     }
 
+    // TODO: Should have just 1 write method that takes in a bool for "write_new"
+    pub fn write(
+        self: MusicLibrary,
+        io: std.Io,
+        allocator: std.mem.Allocator,
+        dir: std.Io.Dir,
+        path: []const u8,
+    ) !void {
+        try self.validate();
+
+        var output = std.Io.Writer.Allocating.init(allocator);
+        defer output.deinit();
+
+        var serializer = std.zon.Serializer{
+            .writer = &output.writer,
+        };
+
+        var zon_library = try serializer.beginStruct(.{
+            .whitespace_style = .{ .wrap = true },
+        });
+
+        var zon_targets = try zon_library.beginTupleField(
+            "targets",
+            .{ .whitespace_style = .{ .wrap = true } },
+        );
+
+        for (self.targets) |entry| {
+            var zon_target = try zon_targets.beginStructField(
+                .{ .whitespace_style = .{ .wrap = true } },
+            );
+
+            try zon_target.field("alias", entry.alias, .{});
+            try zon_target.field("title", entry.title, .{});
+            try zon_target.field("kind", entry.kind, .{});
+            try zon_target.field("source", entry.source, .{});
+            try zon_target.field("url", entry.url, .{});
+
+            try zon_target.end();
+        }
+
+        try zon_targets.end();
+        try zon_library.end();
+
+        try output.writer.writeByte('\n');
+
+        try dir.writeFile(io, .{
+            .sub_path = path,
+            .data = output.writer.buffered(),
+            .flags = .{
+                .exclusive = false,
+            },
+        });
+    }
+
     pub fn find(
         self: MusicLibrary,
         alias: []const u8,
@@ -126,6 +180,31 @@ pub const MusicLibrary = struct {
             }
         }
         return null;
+    }
+
+    pub fn add(
+        self: MusicLibrary,
+        io: std.Io,
+        allocator: std.mem.Allocator,
+        dir: std.Io.Dir,
+        path: []const u8,
+        new_target: target.Target,
+    ) !void {
+        if (self.find(new_target.alias) != null) {
+            return MusicLibraryError.DuplicateAlias;
+        }
+
+        var targets: std.ArrayList(target.Target) = .empty;
+        defer targets.deinit(allocator);
+
+        try targets.appendSlice(allocator, self.targets);
+        try targets.append(allocator, new_target);
+
+        const updated_library = MusicLibrary{
+            .targets = targets.items,
+        };
+
+        try updated_library.write(io, allocator, dir, path);
     }
 };
 
@@ -345,4 +424,190 @@ test "does not overwrite an existing library" {
             "music_library.zon",
         ),
     );
+}
+
+test "write overwrites an existing library" {
+    var temp_dir = std.testing.tmpDir(.{});
+    defer temp_dir.cleanup();
+
+    const initial = MusicLibrary{
+        .targets = &.{
+            .{
+                .alias = "dusk",
+                .title = "Dusk Focus",
+                .kind = .playlist,
+                .source = .ytmusic,
+                .url = "https://music.youtube.com/playlist?list=example",
+            },
+        },
+    };
+
+    try initial.write_new(
+        std.testing.io,
+        std.testing.allocator,
+        temp_dir.dir,
+        "music_library.zon",
+    );
+
+    const expected = MusicLibrary{
+        .targets = &.{
+            .{
+                .alias = "dusk",
+                .title = "Dusk Focus",
+                .kind = .playlist,
+                .source = .ytmusic,
+                .url = "https://music.youtube.com/playlist?list=example",
+            },
+            .{
+                .alias = "dawn",
+                .title = "Dawn Focus",
+                .kind = .track,
+                .source = .youtube,
+                .url = "https://www.youtube.com/watch?v=example",
+            },
+        },
+    };
+
+    try expected.write(
+        std.testing.io,
+        std.testing.allocator,
+        temp_dir.dir,
+        "music_library.zon",
+    );
+
+    const actual = try MusicLibrary.load(
+        std.testing.io,
+        std.testing.allocator,
+        temp_dir.dir,
+        "music_library.zon",
+    );
+    defer actual.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 2), actual.targets.len);
+    try std.testing.expectEqualStrings("dawn", actual.targets[1].alias);
+    try std.testing.expectEqualStrings(
+        "Dawn Focus",
+        actual.targets[1].title,
+    );
+}
+
+test "adds a target to an existing library" {
+    var temp_dir = std.testing.tmpDir(.{});
+    defer temp_dir.cleanup();
+
+    const initial = MusicLibrary{
+        .targets = &.{
+            .{
+                .alias = "dusk",
+                .title = "Dusk Focus",
+                .kind = .playlist,
+                .source = .ytmusic,
+                .url = "https://music.youtube.com/playlist?list=example",
+            },
+        },
+    };
+
+    try initial.write_new(
+        std.testing.io,
+        std.testing.allocator,
+        temp_dir.dir,
+        "music_library.zon",
+    );
+
+    const library = try MusicLibrary.load(
+        std.testing.io,
+        std.testing.allocator,
+        temp_dir.dir,
+        "music_library.zon",
+    );
+    defer library.deinit(std.testing.allocator);
+
+    try library.add(
+        std.testing.io,
+        std.testing.allocator,
+        temp_dir.dir,
+        "music_library.zon",
+        .{
+            .alias = "dawn",
+            .title = "Nightcore 🛡️ Focus Mix",
+            .kind = .track,
+            .source = .youtube,
+            .url = "https://www.youtube.com/watch?v=example",
+        },
+    );
+
+    const updated = try MusicLibrary.load(
+        std.testing.io,
+        std.testing.allocator,
+        temp_dir.dir,
+        "music_library.zon",
+    );
+    defer updated.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 2), updated.targets.len);
+    try std.testing.expectEqualStrings("dawn", updated.targets[1].alias);
+    try std.testing.expectEqualStrings(
+        "Nightcore 🛡️ Focus Mix",
+        updated.targets[1].title,
+    );
+}
+
+test "does not add a duplicate alias" {
+    var temp_dir = std.testing.tmpDir(.{});
+    defer temp_dir.cleanup();
+
+    const initial = MusicLibrary{
+        .targets = &.{
+            .{
+                .alias = "dusk",
+                .title = "Dusk Focus",
+                .kind = .playlist,
+                .source = .ytmusic,
+                .url = "https://music.youtube.com/playlist?list=example",
+            },
+        },
+    };
+
+    try initial.write_new(
+        std.testing.io,
+        std.testing.allocator,
+        temp_dir.dir,
+        "music_library.zon",
+    );
+
+    const library = try MusicLibrary.load(
+        std.testing.io,
+        std.testing.allocator,
+        temp_dir.dir,
+        "music_library.zon",
+    );
+    defer library.deinit(std.testing.allocator);
+
+    try std.testing.expectError(
+        MusicLibraryError.DuplicateAlias,
+        library.add(
+            std.testing.io,
+            std.testing.allocator,
+            temp_dir.dir,
+            "music_library.zon",
+            .{
+                .alias = "dusk",
+                .title = "Different title",
+                .kind = .track,
+                .source = .youtube,
+                .url = "https://www.youtube.com/watch?v=other",
+            },
+        ),
+    );
+
+    const unchanged = try MusicLibrary.load(
+        std.testing.io,
+        std.testing.allocator,
+        temp_dir.dir,
+        "music_library.zon",
+    );
+    defer unchanged.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), unchanged.targets.len);
+    try std.testing.expectEqualStrings("dusk", unchanged.targets[0].alias);
 }

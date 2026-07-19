@@ -11,6 +11,7 @@ const bridge_module = @import("bridge_module");
 const bridge_protocol = bridge_module.protocol;
 const bridge_frame = bridge_module.frame;
 const test_support = @import("_test_support.zig");
+const target_resolver = @import("target_resolver.zig");
 
 const PlayTargetKind = union(enum) {
     alias: []const u8,
@@ -22,6 +23,10 @@ const SetupError = error{
     NotInitialized,
     DataDirectoryMissing,
     LibraryMissing,
+};
+
+const AddError = error{
+    AliasAlreadyExists,
 };
 
 const ExecutionContext = struct {
@@ -81,6 +86,13 @@ pub fn main(init: std.process.Init) !u8 {
                 );
                 return 1;
             },
+            AddError.AliasAlreadyExists => {
+                std.debug.print(
+                    "Alias already exists in library",
+                    .{},
+                );
+                return 1;
+            },
             else => |other| return other,
         };
         return 0;
@@ -103,6 +115,15 @@ pub fn main(init: std.process.Init) !u8 {
             cli.ParseError.MissingPlayTarget => {
                 std.debug.print("No play target was given", .{});
             },
+            cli.ParseError.MissingAddAlias => {
+                std.debug.print("No alias was given for add\n", .{});
+            },
+            cli.ParseError.MissingAddUrl => {
+                std.debug.print("No URL was given for add\n", .{});
+            },
+            cli.ParseError.MissingRemoveAlias => {
+                std.debug.print("No alias was given for remove\n", .{});
+            },
         }
         return 1; // return a non-zero exit code
     }
@@ -112,15 +133,13 @@ fn execute(
     context: ExecutionContext,
     request: protocol.Request,
 ) !void {
-    switch (request.command) {
+    switch (request) {
         .init => try execute_init(
             context.io,
             context.allocator,
             context.config_filepath,
         ),
-        .play => {
-            const play_target = request.play_target orelse
-                return protocol.ProtocolError.MissingPlayTarget;
+        .play => |play_target| {
             switch (classify_play_target(play_target)) {
                 .unsupported_url => |url| {
                     execute_handle_unsupported_url(url);
@@ -168,6 +187,10 @@ fn execute(
                 },
             }
         },
+        .add => |add_request| {
+            try execute_add(context, add_request);
+        },
+        .remove => stub(),
         .pause => {
             try execute_playback_command(context, .pause);
             std.debug.print("Playback paused.\n", .{});
@@ -176,7 +199,7 @@ fn execute(
             try execute_playback_command(context, .@"resume");
             std.debug.print("Playback resumed.\n", .{});
         },
-        else => stub(),
+        .sync, .list, .status => stub(),
     }
 }
 
@@ -378,6 +401,71 @@ fn execute_play_alias(
         );
     }
     return;
+}
+
+fn execute_add(
+    context: ExecutionContext,
+    request: protocol.AddRequest,
+) !void {
+    const cfg = config.Config.load(
+        context.io,
+        context.allocator,
+        std.Io.Dir.cwd(),
+        context.config_filepath,
+    ) catch |err| switch (err) {
+        error.FileNotFound => return SetupError.NotInitialized,
+        else => |other| return other,
+    };
+    defer cfg.deinit(context.allocator);
+
+    var data_dir = std.Io.Dir.openDirAbsolute(
+        context.io,
+        cfg.data_path,
+        .{},
+    ) catch |err| switch (err) {
+        error.FileNotFound, error.NotDir => {
+            return SetupError.DataDirectoryMissing;
+        },
+        else => |other| return other,
+    };
+    defer data_dir.close(context.io);
+
+    const library = music_library.MusicLibrary.load(
+        context.io,
+        context.allocator,
+        data_dir,
+        "music_library.zon",
+    ) catch |err| switch (err) {
+        error.FileNotFound => return SetupError.LibraryMissing,
+        else => |other| return other,
+    };
+    defer library.deinit(context.allocator);
+
+    if (library.find(request.alias) != null) return AddError.AliasAlreadyExists;
+
+    const resolved = try target_resolver.resolve(
+        context.io,
+        context.allocator,
+        request.alias,
+        request.url,
+    );
+    defer resolved.deinit(context.allocator);
+
+    try library.add(
+        context.io,
+        context.allocator,
+        data_dir,
+        "music_library.zon",
+        resolved.target,
+    );
+
+    std.debug.print(
+        "Added {s}: {s}\n",
+        .{
+            resolved.target.alias,
+            resolved.target.title,
+        },
+    );
 }
 
 fn config_path(
@@ -775,4 +863,73 @@ test "pause maps playback_failed to a CLI error" {
     );
 
     try fake_host.join();
+}
+
+test "add rejects an existing alias before resolving its URL" {
+    var temp_dir = std.testing.tmpDir(.{});
+    defer temp_dir.cleanup();
+
+    var data_path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const data_path_length = try temp_dir.dir.realPath(
+        std.testing.io,
+        &data_path_buffer,
+    );
+
+    const data_path = try std.testing.allocator.dupe(
+        u8,
+        data_path_buffer[0..data_path_length],
+    );
+    defer std.testing.allocator.free(data_path);
+
+    const config_filepath = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ data_path, "config.zon" },
+    );
+    defer std.testing.allocator.free(config_filepath);
+
+    const cfg = config.Config{
+        .data_path = data_path,
+    };
+
+    try cfg.write_new(
+        std.testing.io,
+        std.testing.allocator,
+        std.Io.Dir.cwd(),
+        config_filepath,
+    );
+
+    const initial_library = music_library.MusicLibrary{
+        .targets = &.{
+            .{
+                .alias = "dusk",
+                .title = "Dusk Focus",
+                .kind = .playlist,
+                .source = .ytmusic,
+                .url = "https://music.youtube.com/playlist?list=example",
+            },
+        },
+    };
+
+    try initial_library.write_new(
+        std.testing.io,
+        std.testing.allocator,
+        temp_dir.dir,
+        "music_library.zon",
+    );
+
+    const context = ExecutionContext{
+        .io = std.testing.io,
+        .allocator = std.testing.allocator,
+        .config_filepath = config_filepath,
+        .xdg_runtime_dir = null,
+        .temp_dir = null,
+    };
+
+    try std.testing.expectError(
+        AddError.AliasAlreadyExists,
+        execute_add(context, .{
+            .alias = "dusk",
+            .url = "https://example.com/not-used",
+        }),
+    );
 }

@@ -1,10 +1,5 @@
 const std = @import("std");
 
-pub const ProtocolError = error{
-    MissingPlayTarget,
-    UnexpectedPlayTarget,
-};
-
 pub const Command = enum {
     init,
     sync,
