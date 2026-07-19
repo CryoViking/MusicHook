@@ -190,9 +190,7 @@ pub const MusicLibrary = struct {
         path: []const u8,
         new_target: target.Target,
     ) !void {
-        if (self.find(new_target.alias) != null) {
-            return MusicLibraryError.DuplicateAlias;
-        }
+        if (self.find(new_target.alias) != null) return MusicLibraryError.DuplicateAlias;
 
         var targets: std.ArrayList(target.Target) = .empty;
         defer targets.deinit(allocator);
@@ -203,8 +201,32 @@ pub const MusicLibrary = struct {
         const updated_library = MusicLibrary{
             .targets = targets.items,
         };
-
         try updated_library.write(io, allocator, dir, path);
+    }
+
+    pub fn remove(
+        self: MusicLibrary,
+        io: std.Io,
+        allocator: std.mem.Allocator,
+        dir: std.Io.Dir,
+        path: []const u8,
+        alias: []const u8,
+    ) !bool {
+        if (self.find(alias) == null) return false;
+
+        var targets: std.ArrayList(target.Target) = .empty;
+        defer targets.deinit(allocator);
+
+        for (self.targets) |entry| {
+            if (!std.mem.eql(u8, entry.alias, alias))
+                try targets.append(allocator, entry);
+        }
+
+        const updated_library = MusicLibrary{
+            .targets = targets.items,
+        };
+        try updated_library.write(io, allocator, dir, path);
+        return true;
     }
 };
 
@@ -599,6 +621,119 @@ test "does not add a duplicate alias" {
             },
         ),
     );
+
+    const unchanged = try MusicLibrary.load(
+        std.testing.io,
+        std.testing.allocator,
+        temp_dir.dir,
+        "music_library.zon",
+    );
+    defer unchanged.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), unchanged.targets.len);
+    try std.testing.expectEqualStrings("dusk", unchanged.targets[0].alias);
+}
+
+test "removes an existing alias" {
+    var temp_dir = std.testing.tmpDir(.{});
+    defer temp_dir.cleanup();
+
+    const initial = MusicLibrary{
+        .targets = &.{
+            .{
+                .alias = "dusk",
+                .title = "Dusk Focus",
+                .kind = .playlist,
+                .source = .ytmusic,
+                .url = "https://music.youtube.com/playlist?list=example",
+            },
+            .{
+                .alias = "dawn",
+                .title = "Dawn Focus",
+                .kind = .track,
+                .source = .youtube,
+                .url = "https://www.youtube.com/watch?v=example",
+            },
+        },
+    };
+
+    try initial.write_new(
+        std.testing.io,
+        std.testing.allocator,
+        temp_dir.dir,
+        "music_library.zon",
+    );
+
+    const library = try MusicLibrary.load(
+        std.testing.io,
+        std.testing.allocator,
+        temp_dir.dir,
+        "music_library.zon",
+    );
+    defer library.deinit(std.testing.allocator);
+
+    const removed = try library.remove(
+        std.testing.io,
+        std.testing.allocator,
+        temp_dir.dir,
+        "music_library.zon",
+        "dusk",
+    );
+
+    try std.testing.expect(removed);
+
+    const updated = try MusicLibrary.load(
+        std.testing.io,
+        std.testing.allocator,
+        temp_dir.dir,
+        "music_library.zon",
+    );
+    defer updated.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), updated.targets.len);
+    try std.testing.expectEqualStrings("dawn", updated.targets[0].alias);
+}
+
+test "returns false and leaves library unchanged for missing alias" {
+    var temp_dir = std.testing.tmpDir(.{});
+    defer temp_dir.cleanup();
+
+    const initial = MusicLibrary{
+        .targets = &.{
+            .{
+                .alias = "dusk",
+                .title = "Dusk Focus",
+                .kind = .playlist,
+                .source = .ytmusic,
+                .url = "https://music.youtube.com/playlist?list=example",
+            },
+        },
+    };
+
+    try initial.write_new(
+        std.testing.io,
+        std.testing.allocator,
+        temp_dir.dir,
+        "music_library.zon",
+    );
+
+    const library = try MusicLibrary.load(
+        std.testing.io,
+        std.testing.allocator,
+        temp_dir.dir,
+        "music_library.zon",
+    );
+    defer library.deinit(std.testing.allocator);
+
+    const removed = try library.remove(
+        std.testing.io,
+        std.testing.allocator,
+        temp_dir.dir,
+        "music_library.zon",
+        "dawn",
+    );
+
+    try std.testing.expect(!removed);
 
     const unchanged = try MusicLibrary.load(
         std.testing.io,
