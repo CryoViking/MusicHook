@@ -34,6 +34,11 @@ const RemoveResult = enum {
     not_found,
 };
 
+const PlayAliasResult = enum {
+    started,
+    not_found,
+};
+
 const ExecutionContext = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -188,7 +193,14 @@ fn execute(
                     };
                     defer library.deinit(context.allocator);
 
-                    execute_play_alias(library, alias);
+                    switch (try execute_play_alias(context, library, alias)) {
+                        .started => {
+                            std.debug.print("Playback started.\n", .{});
+                        },
+                        .not_found => {
+                            std.debug.print("Alias not found: {s}\n", .{alias});
+                        },
+                    }
                 },
             }
         },
@@ -396,25 +408,13 @@ fn execute_play_direct_url(context: ExecutionContext, url: []const u8) !void {
 }
 
 fn execute_play_alias(
+    context: ExecutionContext,
     library: music_library.MusicLibrary,
     alias: []const u8,
-) void {
-    const request_target = library.find(alias);
-    if (request_target) |item| {
-        std.debug.print(
-            "Target found: alias - {s} | title - {s}",
-            .{
-                item.alias,
-                item.title,
-            },
-        );
-    } else {
-        std.debug.print(
-            "Could not find Target with that alias\n",
-            .{},
-        );
-    }
-    return;
+) !PlayAliasResult {
+    const item = library.find(alias) orelse return .not_found;
+    try execute_play_direct_url(context, item.url);
+    return .started;
 }
 
 fn execute_add(
@@ -1144,4 +1144,64 @@ test "remove leaves the library unchanged for a missing alias" {
 
     try std.testing.expectEqual(@as(usize, 1), unchanged.targets.len);
     try std.testing.expectEqualStrings("dusk", unchanged.targets[0].alias);
+}
+
+test "play alias sends its stored URL to the host" {
+    const expected_url =
+        "https://music.youtube.com/playlist?list=example";
+
+    var fake_host = try test_support.FakeHost.start(
+        "{\"status\":\"ok\",\"error_code\":null}",
+        .{
+            .command = .play,
+            .url = expected_url,
+        },
+    );
+    defer fake_host.deinit();
+
+    const library = music_library.MusicLibrary{
+        .targets = &.{
+            .{
+                .alias = "dusk",
+                .title = "Dusk Focus",
+                .kind = .playlist,
+                .source = .ytmusic,
+                .url = expected_url,
+            },
+        },
+    };
+
+    const context = ExecutionContext{
+        .io = std.testing.io,
+        .allocator = std.testing.allocator,
+        .config_filepath = "",
+        .xdg_runtime_dir = null,
+        .temp_dir = fake_host.runtime_dir,
+    };
+
+    try std.testing.expectEqual(
+        PlayAliasResult.started,
+        try execute_play_alias(context, library, "dusk"),
+    );
+
+    try fake_host.join();
+}
+
+test "play alias returns not found for a missing alias" {
+    const library = music_library.MusicLibrary{
+        .targets = &.{},
+    };
+
+    const context = ExecutionContext{
+        .io = std.testing.io,
+        .allocator = std.testing.allocator,
+        .config_filepath = "",
+        .xdg_runtime_dir = null,
+        .temp_dir = null,
+    };
+
+    try std.testing.expectEqual(
+        PlayAliasResult.not_found,
+        try execute_play_alias(context, library, "dusk"),
+    );
 }
