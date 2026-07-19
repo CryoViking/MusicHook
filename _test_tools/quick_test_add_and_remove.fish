@@ -1,12 +1,7 @@
 #!/usr/bin/env fish
 
-if test (count $argv) -ne 2
-    echo "Usage: ./_test_tools/quick_test_add_remove.fish <alias> <youtube-url>"
-    exit 2
-end
-
-set -l alias $argv[1]
-set -l url $argv[2]
+set -l alias test_alias
+set -l url "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 set -l test_dir "$PWD/.test-home"
 set -l music_bin "$PWD/zig-out/bin/music"
 set -l library_file \

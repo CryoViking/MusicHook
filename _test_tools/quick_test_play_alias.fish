@@ -1,9 +1,4 @@
 #!/usr/bin/env fish
-#
-if test (count $argv) -ne 0
-    echo "Usage: ./_test_tools/quick_test_add.fish"
-    exit 2
-end
 
 set -l alias test_alias
 set -l url "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
@@ -34,5 +29,8 @@ or begin
     exit 1
 end
 
-echo "Verified test target in library."
-cat "$library_file"
+echo "Playing the stored alias: $alias"
+env HOME="$test_dir" "$music_bin" play "$alias"
+or exit $status
+
+echo "Alias playback request completed."
