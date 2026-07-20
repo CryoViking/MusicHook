@@ -1,17 +1,21 @@
 const std = @import("std");
+
 const cli = @import("cli.zig");
 const protocol = @import("protocol.zig");
-const library_module = @import("library_module");
-const music_library = library_module.music_library;
-const config = library_module.config;
-const utils_module = @import("utils_module");
-const utils = utils_module.utils;
 const host_client = @import("host_client.zig");
-const bridge_module = @import("bridge_module");
-const bridge_protocol = bridge_module.protocol;
-const bridge_frame = bridge_module.frame;
 const test_support = @import("_test_support.zig");
 const target_resolver = @import("target_resolver.zig");
+const terminal_link = @import("terminal_link.zig");
+
+const bridge_module = @import("bridge_module");
+const library_module = @import("library_module");
+const utils_module = @import("utils_module");
+
+const bridge_protocol = bridge_module.protocol;
+const bridge_frame = bridge_module.frame;
+const music_library = library_module.music_library;
+const config = library_module.config;
+const utils = utils_module.utils;
 
 const PlayTargetKind = union(enum) {
     alias: []const u8,
