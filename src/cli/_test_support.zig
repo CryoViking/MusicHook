@@ -4,6 +4,10 @@ const bridge_frame = bridge_module.frame;
 const bridge_protocol = bridge_module.protocol;
 const utils_module = @import("utils_module");
 const utils = utils_module.utils;
+const library_module = @import("library_module");
+const target = library_module.target;
+const config = library_module.config;
+const music_library = library_module.music_library;
 
 pub const FakeHost = struct {
     temp_dir: std.testing.TmpDir,
@@ -168,3 +172,47 @@ pub const FakeHost = struct {
         );
     }
 };
+
+pub fn prepare_list_test_library(
+    temp_dir: *std.testing.TmpDir,
+    targets: []const target.Target,
+) ![]u8 {
+    var data_path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const data_path_length = try temp_dir.dir.realPath(
+        std.testing.io,
+        &data_path_buffer,
+    );
+
+    const data_path = try std.testing.allocator.dupe(
+        u8,
+        data_path_buffer[0..data_path_length],
+    );
+    defer std.testing.allocator.free(data_path);
+
+    const config_filepath = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ data_path, "config.zon" },
+    );
+
+    const cfg = config.Config{
+        .data_path = data_path,
+    };
+    try cfg.write_new(
+        std.testing.io,
+        std.testing.allocator,
+        std.Io.Dir.cwd(),
+        config_filepath,
+    );
+
+    const library = music_library.MusicLibrary{
+        .targets = targets,
+    };
+    try library.write_new(
+        std.testing.io,
+        std.testing.allocator,
+        temp_dir.dir,
+        "music_library.zon",
+    );
+
+    return config_filepath;
+}

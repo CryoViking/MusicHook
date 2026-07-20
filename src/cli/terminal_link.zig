@@ -12,8 +12,13 @@ pub const TerminalLinkError = error{
     UnsafeTerminalText,
 };
 
+pub fn validate_text(text: []const u8) TerminalLinkError!void {
+    if (!is_safe(text)) return error.UnsafeTerminalText;
+}
+
 pub fn write(writer: *std.Io.Writer, destination: []const u8, label: []const u8) !void {
-    if (!is_safe(destination) or !is_safe(label)) return error.UnsafeTerminalText;
+    try validate_text(destination);
+    try validate_text(label);
 
     // OSC (Operating System Command) 8 is the terminal hyperlink convention.
     // Its opening form is: ESC ] 8 ; ; <destination> ESC \\.

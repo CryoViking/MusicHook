@@ -6,6 +6,7 @@ const host_client = @import("host_client.zig");
 const test_support = @import("_test_support.zig");
 const target_resolver = @import("target_resolver.zig");
 const terminal_link = @import("terminal_link.zig");
+const terminal_table = @import("terminal_table.zig");
 
 const bridge_module = @import("bridge_module");
 const library_module = @import("library_module");
@@ -15,7 +16,16 @@ const bridge_protocol = bridge_module.protocol;
 const bridge_frame = bridge_module.frame;
 const music_library = library_module.music_library;
 const config = library_module.config;
+const target = library_module.target;
 const utils = utils_module.utils;
+
+const DEFAULT_LIST_WIDTH = 100;
+const LIST_GAP_WIDTH = 2;
+const LIST_COLUMNS = [_]terminal_table.Column{
+    .{ .header = "ALIAS", .min_width = 10, .max_width = 18 },
+    .{ .header = "TITLE", .min_width = 24, .max_width = 40 },
+    .{ .header = "URL", .min_width = 28, .max_width = 60 },
+};
 
 const PlayTargetKind = union(enum) {
     alias: []const u8,
@@ -208,6 +218,19 @@ fn execute(
                 },
             }
         },
+        .list => {
+            const stdout = std.Io.File.stdout();
+            const available_width = stdout_width(context.io, stdout);
+            var output_buffer: [4096]u8 = undefined;
+            var stdout_writer = stdout.writer(context.io, &output_buffer);
+
+            try execute_list(
+                context,
+                &stdout_writer.interface,
+                available_width,
+            );
+            try stdout_writer.interface.flush();
+        },
         .add => |add_request| {
             try execute_add(context, add_request);
         },
@@ -229,7 +252,7 @@ fn execute(
             try execute_playback_command(context, .@"resume");
             std.debug.print("Playback resumed.\n", .{});
         },
-        .sync, .list, .status => stub(),
+        .sync, .status => stub(),
     }
 }
 
@@ -421,6 +444,64 @@ fn execute_play_alias(
     return .started;
 }
 
+fn execute_list(
+    context: ExecutionContext,
+    writer: *std.Io.Writer,
+    available_width: usize,
+) !void {
+    const cfg = config.Config.load(
+        context.io,
+        context.allocator,
+        std.Io.Dir.cwd(),
+        context.config_filepath,
+    ) catch |err| switch (err) {
+        error.FileNotFound => return SetupError.NotInitialized,
+        else => |other| return other,
+    };
+    defer cfg.deinit(context.allocator);
+
+    var data_dir = std.Io.Dir.openDirAbsolute(
+        context.io,
+        cfg.data_path,
+        .{},
+    ) catch |err| switch (err) {
+        error.FileNotFound, error.NotDir => {
+            return SetupError.DataDirectoryMissing;
+        },
+        else => |other| return other,
+    };
+    defer data_dir.close(context.io);
+
+    const library = music_library.MusicLibrary.load(
+        context.io,
+        context.allocator,
+        data_dir,
+        "music_library.zon",
+    ) catch |err| switch (err) {
+        error.FileNotFound => return SetupError.LibraryMissing,
+        else => |other| return other,
+    };
+    defer library.deinit(context.allocator);
+
+    try write_target_section(
+        writer,
+        "PLAYLISTS",
+        "playlists",
+        library.targets,
+        .playlist,
+        available_width,
+    );
+
+    try write_target_section(
+        writer,
+        "TRACKS",
+        "tracks",
+        library.targets,
+        .track,
+        available_width,
+    );
+}
+
 fn execute_add(
     context: ExecutionContext,
     request: protocol.AddRequest,
@@ -550,10 +631,10 @@ fn is_youtube_domain(domain: []const u8) bool {
         "music.youtube.com",
     };
 
-    for (targets) |target| {
-        if (std.mem.eql(u8, domain, target) or
-            std.mem.endsWith(u8, domain, target) and
-                domain[domain.len - target.len - 1] == '.')
+    for (targets) |_target| {
+        if (std.mem.eql(u8, domain, _target) or
+            std.mem.endsWith(u8, domain, _target) and
+                domain[domain.len - _target.len - 1] == '.')
             return true;
     }
     return false;
@@ -613,6 +694,108 @@ fn prompt_line_with_default(
     );
     if (answer.len == 0) return allocator.dupe(u8, default_value);
     return allocator.dupe(u8, answer);
+}
+
+fn write_target_section(
+    writer: *std.Io.Writer,
+    heading: []const u8,
+    empty_label: []const u8,
+    targets: []const target.Target,
+    requested_kind: target.TargetKind,
+    available_width: usize,
+) !void {
+    var matching_count: usize = 0;
+    for (targets) |entry| {
+        if (entry.kind == requested_kind) matching_count += 1;
+    }
+
+    try writer.print("{s}\n\n", .{heading});
+
+    if (matching_count == 0) {
+        try writer.print("No {s} saved.\n\n", .{empty_label});
+        return;
+    }
+    var widths: [LIST_COLUMNS.len]usize = undefined;
+    try terminal_table.compute_column_widths(
+        &LIST_COLUMNS,
+        LIST_GAP_WIDTH,
+        available_width,
+        &widths,
+    );
+
+    try terminal_table.write_header(
+        writer,
+        &LIST_COLUMNS,
+        &widths,
+        LIST_GAP_WIDTH,
+    );
+    try terminal_table.write_separator(
+        writer,
+        &widths,
+        LIST_GAP_WIDTH,
+    );
+
+    for (targets) |entry| {
+        if (entry.kind != requested_kind) continue;
+
+        const cells = [_]terminal_table.Cell{
+            .{
+                .text = entry.alias,
+                .wrap_mode = .word,
+            },
+            .{
+                .text = entry.title,
+                .wrap_mode = .word,
+            },
+            .{
+                .text = entry.url,
+                .link_destination = entry.url,
+                .wrap_mode = .character,
+            },
+        };
+
+        var iterators: [cells.len]terminal_table.CellLineIterator = undefined;
+        var fragments: [cells.len]?[]const u8 = undefined;
+
+        try terminal_table.write_row(
+            writer,
+            &cells,
+            &widths,
+            LIST_GAP_WIDTH,
+            &iterators,
+            &fragments,
+        );
+    }
+
+    try writer.writeByte('\n');
+}
+
+// IOCGWINSZ is the POSIX “get window size” request. io.operate is Zig 0.16’s
+// platform-independent I/O dispatch mechanism; on macOS/Linux it performs the
+// appropriate terminal query. Piped output is not a terminal, so it deliberately
+// falls back to a stable width of 100.
+fn stdout_width(io: std.Io, stdout: std.Io.File) usize {
+    const is_tty = stdout.isTty(io) catch return DEFAULT_LIST_WIDTH;
+    if (!is_tty) return DEFAULT_LIST_WIDTH;
+
+    var winsize: std.posix.winsize = .{
+        .row = 0,
+        .col = 0,
+        .xpixel = 0,
+        .ypixel = 0,
+    };
+
+    const result = io.operate(.{
+        .device_io_control = .{
+            .file = stdout,
+            .code = std.posix.T.IOCGWINSZ,
+            .arg = &winsize,
+        },
+    }) catch return DEFAULT_LIST_WIDTH;
+
+    if (result.device_io_control < 0 or winsize.col == 0) return DEFAULT_LIST_WIDTH;
+
+    return @intCast(winsize.col);
 }
 
 // SECTION: Test Harness
@@ -1207,5 +1390,110 @@ test "play alias returns not found for a missing alias" {
     try std.testing.expectEqual(
         PlayAliasResult.not_found,
         try execute_play_alias(context, library, "dusk"),
+    );
+}
+
+test {
+    _ = @import("terminal_table.zig");
+}
+
+test "list renders playlists and tracks in separate sections" {
+    var temp_dir = std.testing.tmpDir(.{});
+    defer temp_dir.cleanup();
+
+    const config_filepath = try test_support.prepare_list_test_library(
+        &temp_dir,
+        &.{
+            .{
+                .alias = "focus",
+                .title = "Dusk Focus",
+                .kind = .playlist,
+                .source = .ytmusic,
+                .url = "https://music.youtube.com/playlist?list=focus",
+            },
+            .{
+                .alias = "test_alias",
+                .title = "Never Gonna Give You Up",
+                .kind = .track,
+                .source = .youtube,
+                .url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            },
+        },
+    );
+    defer std.testing.allocator.free(config_filepath);
+
+    const context = ExecutionContext{
+        .io = std.testing.io,
+        .allocator = std.testing.allocator,
+        .config_filepath = config_filepath,
+        .xdg_runtime_dir = null,
+        .temp_dir = null,
+    };
+
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+
+    try execute_list(context, &output.writer, 100);
+
+    const rendered = output.writer.buffered();
+
+    try std.testing.expect(
+        std.mem.indexOf(u8, rendered, "PLAYLISTS\n\n") != null,
+    );
+    try std.testing.expect(
+        std.mem.indexOf(u8, rendered, "TRACKS\n\n") != null,
+    );
+    try std.testing.expect(
+        std.mem.indexOf(u8, rendered, "focus") != null,
+    );
+    try std.testing.expect(
+        std.mem.indexOf(u8, rendered, "Dusk Focus") != null,
+    );
+    try std.testing.expect(
+        std.mem.indexOf(u8, rendered, "test_alias") != null,
+    );
+    try std.testing.expect(
+        std.mem.indexOf(u8, rendered, "Never Gonna Give You Up") != null,
+    );
+
+    // The complete destination remains present inside the OSC 8 sequences.
+    try std.testing.expect(
+        std.mem.indexOf(
+            u8,
+            rendered,
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        ) != null,
+    );
+}
+
+test "list prints empty playlist and track sections" {
+    var temp_dir = std.testing.tmpDir(.{});
+    defer temp_dir.cleanup();
+
+    const config_filepath = try test_support.prepare_list_test_library(
+        &temp_dir,
+        &.{},
+    );
+    defer std.testing.allocator.free(config_filepath);
+
+    const context = ExecutionContext{
+        .io = std.testing.io,
+        .allocator = std.testing.allocator,
+        .config_filepath = config_filepath,
+        .xdg_runtime_dir = null,
+        .temp_dir = null,
+    };
+
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+
+    try execute_list(context, &output.writer, 100);
+
+    try std.testing.expectEqualStrings(
+        "PLAYLISTS\n\n" ++
+            "No playlists saved.\n\n" ++
+            "TRACKS\n\n" ++
+            "No tracks saved.\n\n",
+        output.writer.buffered(),
     );
 }
