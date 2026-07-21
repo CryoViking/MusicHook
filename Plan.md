@@ -36,6 +36,7 @@ YouTube Music / YouTube tabs
 music init
 music add <alias> <YouTube URL>
 music remove <alias>
+music list
 music play <alias-or-YouTube-URL>
 music pause
 music resume
@@ -57,20 +58,9 @@ Missing aliases are normal not-found results, not errors.
 - Metadata resolution through a public request to the supplied URL, using Open Graph title metadata; no Google credentials or browser cookies are exposed to the CLI.
 - Alias playback: resolve a locally stored target, then reuse the normal host/extension playback path.
 - Repeatable Fish smoke-test helpers using an ignored `.test-home` and a deliberate public `test_alias` fixture.
+- `music list`: separate compact playlist and track tables with bounded, wrapping columns and OSC 8 hyperlinks for URLs.
 
-## Next smallest step: `music list`
-
-`music list` is the last intended local-library command for this first finished shape.
-
-```text
-load config
-→ open local library
-→ print known aliases, titles, sources, kinds, and URLs
-```
-
-It requires no browser, extension, API, or network access. It is an occasional inspection tool, not a browsing or discovery interface.
-
-## Deferred: `music doctor`
+## Next implementation: `music doctor`
 
 `doctor` is a diagnostic command, not a playback-state query. It should eventually report independent checks clearly, without changing playback:
 
