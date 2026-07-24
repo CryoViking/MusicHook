@@ -2,3 +2,4 @@
 zig-out/
 out/
 .test-home/
+scripts/_local/

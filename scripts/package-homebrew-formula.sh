@@ -110,6 +110,8 @@ repo_dir=$(
     pwd -P
 )
 
+sh "$script_dir/check-release-metadata.sh" --quiet
+
 if [ -z "$output_dir" ]; then
   output_dir="$repo_dir/out"
 fi

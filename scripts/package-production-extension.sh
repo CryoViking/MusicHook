@@ -49,6 +49,8 @@ repo_dir=$(
     pwd -P
 )
 
+sh "$script_dir/check-release-metadata.sh" --quiet
+
 if [ -z "$output_path" ]; then
   output_path="$repo_dir/out/MusicHook.xpi"
 fi

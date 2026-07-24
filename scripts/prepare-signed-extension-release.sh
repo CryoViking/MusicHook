@@ -66,6 +66,8 @@ command -v shasum >/dev/null 2>&1 || fail "shasum is required"
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 repo_dir=$(CDPATH= cd -- "$script_dir/.." && pwd -P)
 
+sh "$script_dir/check-release-metadata.sh" --quiet
+
 if [ -z "$output_dir" ]; then
   output_dir="$repo_dir/out/extension-release"
 fi

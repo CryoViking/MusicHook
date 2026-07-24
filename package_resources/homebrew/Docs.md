@@ -12,6 +12,10 @@ SHA-256 checksum. Do not publish a formula containing a local `file://` URL.
 `scripts/package-homebrew-formula.sh` renders the formula after the source
 archive has been uploaded.
 
+All release scripts run `scripts/check-release-metadata.sh` first. It rejects
+a release when `build.zig.zon` and the production extension manifest disagree
+about the version.
+
 The tap's default GitHub Actions workflows build bottles. Once a formula pull
 request is reviewed and its checks pass, publish those bottles with the tap's
 `brew pr-pull` workflow. Users with a matching bottle then download it instead

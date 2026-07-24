@@ -54,11 +54,11 @@ After AMO signs an unlisted submission, use
 - its SHA-256 checksum; and
 - `updates.json` for the HTTPS URL embedded in the production manifest.
 
-`scripts/upload-signed-extension-release.sh` uploads the signed XPI and its
-checksum to an existing GitHub Release through the authenticated GitHub CLI.
-It can create the release with `--create`, but deliberately does not publish
-the update manifest: GitHub Pages deployment remains an explicit reviewed
-commit because it is the browser's long-lived update authority.
+The prepared signed XPI and checksum are uploaded to GitHub Releases through
+the maintainer's authenticated GitHub CLI. The local upload wrapper is not
+part of the public repository contract. GitHub Pages deployment remains an
+explicit reviewed commit because it is the browser's long-lived update
+authority.
 
 The release's XPI and `updates.json` must describe the same add-on ID and
 version. Each later extension release needs a higher manifest version, a new
@@ -66,12 +66,15 @@ Mozilla signature, a new checksum, and a replacement update manifest.
 
 ## Native-host manifest restrictions
 
-Firefox launches `music-hook-host` from a separate, machine-local manifest.
-The macOS per-user location used by MusicHook is:
+Zen launches `music-hook-host` from a separate, machine-local manifest.
+The macOS per-user location used by MusicHook's Zen installers is:
 
 ```text
-~/Library/Application Support/Mozilla/NativeMessagingHosts/music_hook_host.json
+~/Library/Application Support/zen/NativeMessagingHosts/music_hook_host.json
 ```
+
+This is Zen-specific. Firefox uses its own `Mozilla/NativeMessagingHosts`
+directory; MusicHook's current installers deliberately target Zen.
 
 Its relevant form is:
 
