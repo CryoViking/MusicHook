@@ -5,7 +5,7 @@
   "description": "Local CLI bridge for starting focused music in Zen.",
   "browser_specific_settings": {
     "gecko": {
-      "id": "@music-hook-dev.automatacrypt"
+      "id": "@music-hook.automatacrypt"
     }
   },
   "background": {

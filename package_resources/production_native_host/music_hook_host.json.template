@@ -1,0 +1,9 @@
+{
+  "name": "music_hook_host",
+  "description": "MusicHook native messaging host",
+  "path": "__MUSIC_HOOK_HOST_PATH__",
+  "type": "stdio",
+  "allowed_extensions": [
+    "@music-hook.automatacrypt"
+  ]
+}
