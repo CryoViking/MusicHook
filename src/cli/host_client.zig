@@ -23,14 +23,8 @@ pub const HostClient = struct {
         );
         defer allocator.free(socket_path);
 
-        const socket_address = try std.Io.net.UnixAddress.init(
-            socket_path,
-        );
-
-        return .{
-            .io = io,
-            .stream = try socket_address.connect(io),
-        };
+        const socket_address = try std.Io.net.UnixAddress.init(socket_path);
+        return .{ .io = io, .stream = try socket_address.connect(io) };
     }
 
     pub fn deinit(self: *HostClient) void {
@@ -48,18 +42,12 @@ pub const HostClient = struct {
         var output = std.Io.Writer.Allocating.init(allocator);
         errdefer output.deinit();
 
-        try std.json.Stringify.value(
-            request,
-            .{},
-            &output.writer,
-        );
+        try std.json.Stringify.value(request, .{}, &output.writer);
 
         const request_json = try output.toOwnedSlice();
         defer allocator.free(request_json);
 
-        const request_frame = try (bridge_frame.NativeMessage{
-            .json_bytes = request_json,
-        }).encode(allocator);
+        const request_frame = try (bridge_frame.NativeMessage{ .json_bytes = request_json }).encode(allocator);
         defer allocator.free(request_frame);
 
         var output_buffer: [1024]u8 = undefined;
@@ -68,15 +56,10 @@ pub const HostClient = struct {
 
         var input_buffer: [4096]u8 = undefined;
         var reader = self.stream.reader(self.io, &input_buffer);
-        const response_frame = try bridge_frame.read_frame(
-            allocator,
-            &reader.interface,
-        );
+        const response_frame = try bridge_frame.read_frame(allocator, &reader.interface);
         defer allocator.free(response_frame);
 
-        const response_message = try bridge_frame.NativeMessage.decode(
-            response_frame,
-        );
+        const response_message = try bridge_frame.NativeMessage.decode(response_frame);
 
         var parsed_response = try std.json.parseFromSlice(
             bridge_protocol.Response,
@@ -93,8 +76,7 @@ pub const HostClient = struct {
 };
 
 test "HostClient sends a play request over a Unix socket and receives a response" {
-    const expected_url =
-        "https://music.youtube.com/watch?v=example";
+    const expected_url = "https://music.youtube.com/watch?v=example";
 
     var fake_host = try test_support.FakeHost.start(
         "{\"status\":\"ok\",\"error_code\":null}",
@@ -117,19 +99,12 @@ test "HostClient sends a play request over a Unix socket and receives a response
 
     try fake_host.join();
 
-    try std.testing.expectEqual(
-        bridge_protocol.ResponseStatus.ok,
-        response.status,
-    );
-    try std.testing.expectEqual(
-        @as(?bridge_protocol.ErrorCode, null),
-        response.error_code,
-    );
+    try std.testing.expectEqual(bridge_protocol.ResponseStatus.ok, response.status);
+    try std.testing.expectEqual(@as(?bridge_protocol.ErrorCode, null), response.error_code);
 }
 
 test "HostClient returns a failed response from the host" {
-    const expected_url =
-        "https://music.youtube.com/watch?v=example";
+    const expected_url = "https://music.youtube.com/watch?v=example";
 
     var fake_host = try test_support.FakeHost.start(
         "{\"status\":\"failed\",\"error_code\":\"zen_unavailable\"}",
@@ -152,19 +127,12 @@ test "HostClient returns a failed response from the host" {
 
     try fake_host.join();
 
-    try std.testing.expectEqual(
-        bridge_protocol.ResponseStatus.failed,
-        response.status,
-    );
-    try std.testing.expectEqual(
-        @as(?bridge_protocol.ErrorCode, .zen_unavailable),
-        response.error_code,
-    );
+    try std.testing.expectEqual(bridge_protocol.ResponseStatus.failed, response.status);
+    try std.testing.expectEqual(@as(?bridge_protocol.ErrorCode, .zen_unavailable), response.error_code);
 }
 
 test "HostClient rejects a failed response without an error code" {
-    const expected_url =
-        "https://music.youtube.com/watch?v=example";
+    const expected_url = "https://music.youtube.com/watch?v=example";
 
     var fake_host = try test_support.FakeHost.start(
         "{\"status\":\"failed\",\"error_code\":null}",
@@ -192,8 +160,7 @@ test "HostClient rejects a failed response without an error code" {
 }
 
 test "HostClient rejects invalid JSON from the host" {
-    const expected_url =
-        "https://music.youtube.com/watch?v=example";
+    const expected_url = "https://music.youtube.com/watch?v=example";
 
     var fake_host = try test_support.FakeHost.start(
         "{not json}",
@@ -218,4 +185,26 @@ test "HostClient rejects invalid JSON from the host" {
     );
 
     try fake_host.join();
+}
+test "HostClient sends a ping request over a Unix socket and receives a response" {
+    var fake_host = try test_support.FakeHost.start(
+        "{\"status\":\"ok\",\"error_code\":null}",
+        .{ .command = .ping },
+    );
+    defer fake_host.deinit();
+
+    var client = try HostClient.connect(
+        std.testing.io,
+        std.testing.allocator,
+        null,
+        fake_host.runtime_dir,
+    );
+    defer client.deinit();
+
+    const response = try client.send(std.testing.allocator, .{ .command = .ping });
+
+    try fake_host.join();
+
+    try std.testing.expectEqual(bridge_protocol.ResponseStatus.ok, response.status);
+    try std.testing.expectEqual(@as(?bridge_protocol.ErrorCode, null), response.error_code);
 }

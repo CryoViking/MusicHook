@@ -39,6 +39,12 @@ const SetupError = error{
     LibraryMissing,
 };
 
+const NativeBridgeError = error{
+    ExtensionUnavailable,
+    ZenUnavailable,
+    UnexpectedPingFailure,
+};
+
 const AddError = error{
     AliasAlreadyExists,
 };
@@ -66,15 +72,17 @@ const DoctorCheck = union(enum) {
     }
 };
 
-const LocalDoctorReport = struct {
-    config: DoctorCheck,
-    data_directory: DoctorCheck,
-    library_file: DoctorCheck,
+const DoctorReport = struct {
+    config: DoctorCheck = .skipped,
+    data_directory: DoctorCheck = .skipped,
+    library_file: DoctorCheck = .skipped,
+    native_bridge: DoctorCheck = .skipped,
 
-    fn is_healthy(self: LocalDoctorReport) bool {
+    fn is_healthy(self: DoctorReport) bool {
         return self.config.is_ok() and
             self.data_directory.is_ok() and
-            self.library_file.is_ok();
+            self.library_file.is_ok() and
+            self.native_bridge.is_ok();
     }
 };
 
@@ -278,39 +286,67 @@ fn execute(context: ExecutionContext, request: protocol.Request) !void {
     }
 }
 
-fn execute_doctor(context: ExecutionContext, writer: *std.Io.Writer) !LocalDoctorReport {
-    const report = inspect_local_doctor(context);
+fn execute_doctor(context: ExecutionContext, writer: *std.Io.Writer) !DoctorReport {
+    var report: DoctorReport = .{};
+    inspect_local_doctor(context, &report);
+    inspect_native_bridge(context, &report);
     try write_local_doctor_report(writer, report);
     return report;
 }
 
-fn inspect_local_doctor(context: ExecutionContext) LocalDoctorReport {
+fn inspect_native_bridge(context: ExecutionContext, report: *DoctorReport) void {
+    var client = host_client.HostClient.connect(
+        context.io,
+        context.allocator,
+        context.xdg_runtime_dir,
+        context.temp_dir,
+    ) catch |err| {
+        report.native_bridge = .{ .failed = err };
+        return;
+    };
+    defer client.deinit();
+
+    const response = client.send(
+        context.allocator,
+        .{ .command = .ping },
+    ) catch |err| {
+        report.native_bridge = .{ .failed = err };
+        return;
+    };
+
+    report.native_bridge = switch (response.status) {
+        .ok => .ok,
+        .failed => switch (response.error_code.?) {
+            .extension_unavailable => .{ .failed = error.ExtensionUnavailable },
+            .zen_unavailable => .{ .failed = error.ZenUnavailable },
+            else => .{ .failed = error.UnexpectedPingFailure },
+        },
+    };
+}
+
+fn inspect_local_doctor(context: ExecutionContext, report: *DoctorReport) void {
     const cfg = config.Config.load(
         context.io,
         context.allocator,
         std.Io.Dir.cwd(),
         context.config_filepath,
     ) catch |err| {
-        return .{
-            .config = .{ .failed = err },
-            .data_directory = .skipped,
-            .library_file = .skipped,
-        };
+        report.config = .{ .failed = err };
+        return;
     };
     defer cfg.deinit(context.allocator);
+    report.config = .ok;
 
     var data_dir = std.Io.Dir.openDirAbsolute(
         context.io,
         cfg.data_path,
         .{},
     ) catch |err| {
-        return .{
-            .config = .ok,
-            .data_directory = .{ .failed = err },
-            .library_file = .skipped,
-        };
+        report.data_directory = .{ .failed = err };
+        return;
     };
     defer data_dir.close(context.io);
+    report.data_directory = .ok;
 
     const library = music_library.MusicLibrary.load(
         context.io,
@@ -318,27 +354,20 @@ fn inspect_local_doctor(context: ExecutionContext) LocalDoctorReport {
         data_dir,
         "music_library.zon",
     ) catch |err| {
-        return .{
-            .config = .ok,
-            .data_directory = .ok,
-            .library_file = .{ .failed = err },
-        };
+        report.library_file = .{ .failed = err };
+        return;
     };
     defer library.deinit(context.allocator);
-
-    return .{
-        .config = .ok,
-        .data_directory = .ok,
-        .library_file = .ok,
-    };
+    report.library_file = .ok;
 }
 
-fn write_local_doctor_report(writer: *std.Io.Writer, report: LocalDoctorReport) !void {
+fn write_local_doctor_report(writer: *std.Io.Writer, report: DoctorReport) !void {
     try writer.writeAll("MusicHook doctor\n\n");
 
     try write_doctor_check(writer, "config", report.config);
     try write_doctor_check(writer, "data directory", report.data_directory);
     try write_doctor_check(writer, "library file", report.library_file);
+    try write_doctor_check(writer, "native bridge", report.native_bridge);
 }
 
 fn write_doctor_check(writer: *std.Io.Writer, label: []const u8, check: DoctorCheck) !void {
@@ -1446,10 +1475,7 @@ test "list prints empty playlist and track sections" {
     var temp_dir = std.testing.tmpDir(.{});
     defer temp_dir.cleanup();
 
-    const config_filepath = try test_support.prepare_list_test_library(
-        &temp_dir,
-        &.{},
-    );
+    const config_filepath = try test_support.prepare_list_test_library(&temp_dir, &.{});
     defer std.testing.allocator.free(config_filepath);
 
     const context = ExecutionContext{
@@ -1479,26 +1505,21 @@ test "doctor skips dependent checks when config is missing" {
     defer temp_dir.cleanup();
 
     var data_path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const data_path_length = try temp_dir.dir.realPath(
-        std.testing.io,
-        &data_path_buffer,
-    );
+    const data_path_length = try temp_dir.dir.realPath(std.testing.io, &data_path_buffer);
 
     const data_path = data_path_buffer[0..data_path_length];
 
-    const config_filepath = try std.fs.path.join(
-        std.testing.allocator,
-        &.{ data_path, "missing-config.zon" },
-    );
+    const config_filepath = try std.fs.path.join(std.testing.allocator, &.{ data_path, "missing-config.zon" });
     defer std.testing.allocator.free(config_filepath);
 
-    const report = inspect_local_doctor(.{
+    var report: DoctorReport = .{};
+    inspect_local_doctor(.{
         .io = std.testing.io,
         .allocator = std.testing.allocator,
         .config_filepath = config_filepath,
         .xdg_runtime_dir = null,
         .temp_dir = null,
-    });
+    }, &report);
 
     try std.testing.expectEqual(.failed, std.meta.activeTag(report.config));
     try std.testing.expectEqual(.skipped, std.meta.activeTag(report.data_directory));
@@ -1511,22 +1532,13 @@ test "doctor reports a missing configured data directory" {
     defer temp_dir.cleanup();
 
     var root_path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const root_path_length = try temp_dir.dir.realPath(
-        std.testing.io,
-        &root_path_buffer,
-    );
+    const root_path_length = try temp_dir.dir.realPath(std.testing.io, &root_path_buffer);
     const root_path = root_path_buffer[0..root_path_length];
 
-    const data_path = try std.fs.path.join(
-        std.testing.allocator,
-        &.{ root_path, "missing-data-directory" },
-    );
+    const data_path = try std.fs.path.join(std.testing.allocator, &.{ root_path, "missing-data-directory" });
     defer std.testing.allocator.free(data_path);
 
-    const config_filepath = try std.fs.path.join(
-        std.testing.allocator,
-        &.{ root_path, "config.zon" },
-    );
+    const config_filepath = try std.fs.path.join(std.testing.allocator, &.{ root_path, "config.zon" });
     defer std.testing.allocator.free(config_filepath);
 
     const cfg = config.Config{ .data_path = data_path };
@@ -1537,13 +1549,14 @@ test "doctor reports a missing configured data directory" {
         config_filepath,
     );
 
-    const report = inspect_local_doctor(.{
+    var report: DoctorReport = .{};
+    inspect_local_doctor(.{
         .io = std.testing.io,
         .allocator = std.testing.allocator,
         .config_filepath = config_filepath,
         .xdg_runtime_dir = null,
         .temp_dir = null,
-    });
+    }, &report);
 
     try std.testing.expectEqual(.ok, std.meta.activeTag(report.config));
     try std.testing.expectEqual(.failed, std.meta.activeTag(report.data_directory));
@@ -1556,16 +1569,10 @@ test "doctor reports a missing library file" {
     defer temp_dir.cleanup();
 
     var data_path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const data_path_length = try temp_dir.dir.realPath(
-        std.testing.io,
-        &data_path_buffer,
-    );
+    const data_path_length = try temp_dir.dir.realPath(std.testing.io, &data_path_buffer);
     const data_path = data_path_buffer[0..data_path_length];
 
-    const config_filepath = try std.fs.path.join(
-        std.testing.allocator,
-        &.{ data_path, "config.zon" },
-    );
+    const config_filepath = try std.fs.path.join(std.testing.allocator, &.{ data_path, "config.zon" });
     defer std.testing.allocator.free(config_filepath);
 
     const cfg = config.Config{ .data_path = data_path };
@@ -1576,13 +1583,14 @@ test "doctor reports a missing library file" {
         config_filepath,
     );
 
-    const report = inspect_local_doctor(.{
+    var report: DoctorReport = .{};
+    inspect_local_doctor(.{
         .io = std.testing.io,
         .allocator = std.testing.allocator,
         .config_filepath = config_filepath,
         .xdg_runtime_dir = null,
         .temp_dir = null,
-    });
+    }, &report);
 
     try std.testing.expectEqual(.ok, std.meta.activeTag(report.config));
     try std.testing.expectEqual(.ok, std.meta.activeTag(report.data_directory));
@@ -1594,30 +1602,25 @@ test "doctor reports healthy local configuration and library" {
     var temp_dir = std.testing.tmpDir(.{});
     defer temp_dir.cleanup();
 
-    const config_filepath = try test_support.prepare_list_test_library(
-        &temp_dir,
-        &.{},
-    );
+    const config_filepath = try test_support.prepare_list_test_library(&temp_dir, &.{});
     defer std.testing.allocator.free(config_filepath);
 
-    const report = inspect_local_doctor(.{
+    var report: DoctorReport = .{};
+    inspect_local_doctor(.{
         .io = std.testing.io,
         .allocator = std.testing.allocator,
         .config_filepath = config_filepath,
         .xdg_runtime_dir = null,
         .temp_dir = null,
-    });
+    }, &report);
 
     try std.testing.expectEqual(.ok, std.meta.activeTag(report.config));
     try std.testing.expectEqual(.ok, std.meta.activeTag(report.data_directory));
     try std.testing.expectEqual(.ok, std.meta.activeTag(report.library_file));
-    try std.testing.expect(report.is_healthy());
 }
 
 test "doctor renders a healthy local report" {
-    var output = std.Io.Writer.Allocating.init(
-        std.testing.allocator,
-    );
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
     defer output.deinit();
 
     try write_local_doctor_report(
@@ -1626,6 +1629,7 @@ test "doctor renders a healthy local report" {
             .config = .ok,
             .data_directory = .ok,
             .library_file = .ok,
+            .native_bridge = .ok,
         },
     );
 
@@ -1633,15 +1637,14 @@ test "doctor renders a healthy local report" {
         "MusicHook doctor\n\n" ++
             "config: ok\n" ++
             "data directory: ok\n" ++
-            "library file: ok\n",
+            "library file: ok\n" ++
+            "native bridge: ok\n",
         output.writer.buffered(),
     );
 }
 
 test "doctor renders failed and skipped local checks" {
-    var output = std.Io.Writer.Allocating.init(
-        std.testing.allocator,
-    );
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
     defer output.deinit();
 
     try write_local_doctor_report(
@@ -1650,6 +1653,7 @@ test "doctor renders failed and skipped local checks" {
             .config = .{ .failed = error.FileNotFound },
             .data_directory = .skipped,
             .library_file = .skipped,
+            .native_bridge = .skipped,
         },
     );
 
@@ -1657,7 +1661,96 @@ test "doctor renders failed and skipped local checks" {
         "MusicHook doctor\n\n" ++
             "config: failed (FileNotFound)\n" ++
             "data directory: skipped (prerequisite failed)\n" ++
-            "library file: skipped (prerequisite failed)\n",
+            "library file: skipped (prerequisite failed)\n" ++
+            "native bridge: skipped (prerequisite failed)\n",
+        output.writer.buffered(),
+    );
+}
+
+test "doctor reports a healthy native bridge" {
+    var temp_dir = std.testing.tmpDir(.{});
+    defer temp_dir.cleanup();
+
+    const config_filepath = try test_support.prepare_list_test_library(&temp_dir, &.{});
+    defer std.testing.allocator.free(config_filepath);
+
+    var fake_host = try test_support.FakeHost.start(
+        "{\"status\":\"ok\",\"error_code\":null}",
+        .{ .command = .ping },
+    );
+    defer fake_host.deinit();
+
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+
+    const report = try execute_doctor(
+        .{
+            .io = std.testing.io,
+            .allocator = std.testing.allocator,
+            .config_filepath = config_filepath,
+            .xdg_runtime_dir = null,
+            .temp_dir = fake_host.runtime_dir,
+        },
+        &output.writer,
+    );
+
+    try fake_host.join();
+
+    try std.testing.expect(report.is_healthy());
+
+    try std.testing.expectEqualStrings(
+        "MusicHook doctor\n\n" ++
+            "config: ok\n" ++
+            "data directory: ok\n" ++
+            "library file: ok\n" ++
+            "native bridge: ok\n",
+        output.writer.buffered(),
+    );
+}
+
+test "doctor reports a failed native bridge" {
+    var temp_dir = std.testing.tmpDir(.{});
+    defer temp_dir.cleanup();
+
+    const config_filepath = try test_support.prepare_list_test_library(&temp_dir, &.{});
+    defer std.testing.allocator.free(config_filepath);
+
+    var fake_host = try test_support.FakeHost.start(
+        "{\"status\":\"failed\",\"error_code\":\"zen_unavailable\"}",
+        .{ .command = .ping },
+    );
+    defer fake_host.deinit();
+
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+
+    const report = try execute_doctor(
+        .{
+            .io = std.testing.io,
+            .allocator = std.testing.allocator,
+            .config_filepath = config_filepath,
+            .xdg_runtime_dir = null,
+            .temp_dir = fake_host.runtime_dir,
+        },
+        &output.writer,
+    );
+
+    try fake_host.join();
+
+    try std.testing.expect(!report.is_healthy());
+    try std.testing.expectEqual(.failed, std.meta.activeTag(report.native_bridge));
+
+    switch (report.native_bridge) {
+        .failed => |err| try std.testing.expectEqual(error.ZenUnavailable, err),
+        else => try std.testing.expect(false),
+    }
+
+    try std.testing.expectEqualStrings(
+        "MusicHook doctor\n\n" ++
+            "config: ok\n" ++
+            "data directory: ok\n" ++
+            "library file: ok\n" ++
+            "native bridge: failed (ZenUnavailable)\n",
         output.writer.buffered(),
     );
 }
