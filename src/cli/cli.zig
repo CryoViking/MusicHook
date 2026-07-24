@@ -38,10 +38,6 @@ pub fn parse(args: []const []const u8) ParseError!protocol.Request {
             .{ .init = {} },
             args,
         ),
-        .sync => parse_without_arguments(
-            .{ .sync = {} },
-            args,
-        ),
         .list => parse_without_arguments(
             .{ .list = {} },
             args,
@@ -54,8 +50,8 @@ pub fn parse(args: []const []const u8) ParseError!protocol.Request {
             .{ .@"resume" = {} },
             args,
         ),
-        .status => parse_without_arguments(
-            .{ .status = {} },
+        .doctor => parse_without_arguments(
+            .{ .doctor = {} },
             args,
         ),
     };
@@ -280,11 +276,10 @@ test "parses commands without arguments" {
         command: protocol.Command,
     }{
         .{ .argument = "init", .command = .init },
-        .{ .argument = "sync", .command = .sync },
         .{ .argument = "list", .command = .list },
         .{ .argument = "pause", .command = .pause },
         .{ .argument = "resume", .command = .@"resume" },
-        .{ .argument = "status", .command = .status },
+        .{ .argument = "doctor", .command = .doctor },
     };
 
     for (cases) |case| {
@@ -298,11 +293,10 @@ test "parses commands without arguments" {
 test "commands without arguments reject an extra argument" {
     const cases = [_][]const u8{
         "init",
-        "sync",
         "list",
         "pause",
         "resume",
-        "status",
+        "doctor",
     };
 
     for (cases) |command| {

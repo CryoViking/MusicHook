@@ -53,6 +53,35 @@ const PlayAliasResult = enum {
     not_found,
 };
 
+const DoctorCheck = union(enum) {
+    ok,
+    skipped,
+    failed: anyerror,
+
+    fn is_ok(self: DoctorCheck) bool {
+        return switch (self) {
+            .ok => true,
+            .skipped, .failed => false,
+        };
+    }
+};
+
+const LocalDoctorReport = struct {
+    config: DoctorCheck,
+    data_directory: DoctorCheck,
+    library_file: DoctorCheck,
+
+    fn is_healthy(self: LocalDoctorReport) bool {
+        return self.config.is_ok() and
+            self.data_directory.is_ok() and
+            self.library_file.is_ok();
+    }
+};
+
+const DoctorError = error{
+    ChecksFailed,
+};
+
 const ExecutionContext = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -90,33 +119,22 @@ pub fn main(init: std.process.Init) !u8 {
 
         execute(context, request) catch |err| switch (err) {
             SetupError.NotInitialized => {
-                std.debug.print(
-                    "MusicHook has not been initialized, Run `music init` first.\n",
-                    .{},
-                );
+                std.debug.print("MusicHook has not been initialized, Run `music init` first.\n", .{});
                 return 1;
             },
             SetupError.DataDirectoryMissing => {
-                std.debug.print(
-                    "MusicHook's configured data directory is unavailable.\n",
-                    .{},
-                );
+                std.debug.print("MusicHook's configured data directory is unavailable.\n", .{});
                 return 1;
             },
             SetupError.LibraryMissing => {
-                std.debug.print(
-                    "MusicHook's data directory has no music_library.zon file.\n",
-                    .{},
-                );
+                std.debug.print("MusicHook's data directory has no music_library.zon file.\n", .{});
                 return 1;
             },
             AddError.AliasAlreadyExists => {
-                std.debug.print(
-                    "Alias already exists in library",
-                    .{},
-                );
+                std.debug.print("Alias already exists in library", .{});
                 return 1;
             },
+            DoctorError.ChecksFailed => return 1,
             else => |other| return other,
         };
         return 0;
@@ -153,10 +171,7 @@ pub fn main(init: std.process.Init) !u8 {
     }
 }
 
-fn execute(
-    context: ExecutionContext,
-    request: protocol.Request,
-) !void {
+fn execute(context: ExecutionContext, request: protocol.Request) !void {
     switch (request) {
         .init => try execute_init(
             context.io,
@@ -224,11 +239,7 @@ fn execute(
             var output_buffer: [4096]u8 = undefined;
             var stdout_writer = stdout.writer(context.io, &output_buffer);
 
-            try execute_list(
-                context,
-                &stdout_writer.interface,
-                available_width,
-            );
+            try execute_list(context, &stdout_writer.interface, available_width);
             try stdout_writer.interface.flush();
         },
         .add => |add_request| {
@@ -252,21 +263,94 @@ fn execute(
             try execute_playback_command(context, .@"resume");
             std.debug.print("Playback resumed.\n", .{});
         },
-        .sync, .status => stub(),
+        .doctor => {
+            const stdout = std.Io.File.stdout();
+            var output_buffer: [4096]u8 = undefined;
+            var stdout_writer = stdout.writer(context.io, &output_buffer);
+
+            const report = try execute_doctor(context, &stdout_writer.interface);
+            try stdout_writer.interface.flush();
+
+            if (!report.is_healthy()) {
+                return DoctorError.ChecksFailed;
+            }
+        },
     }
 }
 
-fn stub() void {
-    std.debug.print("Stubbed command, doesn't exist yet\n", .{});
+fn execute_doctor(context: ExecutionContext, writer: *std.Io.Writer) !LocalDoctorReport {
+    const report = inspect_local_doctor(context);
+    try write_local_doctor_report(writer, report);
+    return report;
 }
 
-fn execute_init(
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    config_filepath: []const u8,
-) !void {
-    const config_dir = std.fs.path.dirname(config_filepath) orelse
-        return error.InvalidConfigPath;
+fn inspect_local_doctor(context: ExecutionContext) LocalDoctorReport {
+    const cfg = config.Config.load(
+        context.io,
+        context.allocator,
+        std.Io.Dir.cwd(),
+        context.config_filepath,
+    ) catch |err| {
+        return .{
+            .config = .{ .failed = err },
+            .data_directory = .skipped,
+            .library_file = .skipped,
+        };
+    };
+    defer cfg.deinit(context.allocator);
+
+    var data_dir = std.Io.Dir.openDirAbsolute(
+        context.io,
+        cfg.data_path,
+        .{},
+    ) catch |err| {
+        return .{
+            .config = .ok,
+            .data_directory = .{ .failed = err },
+            .library_file = .skipped,
+        };
+    };
+    defer data_dir.close(context.io);
+
+    const library = music_library.MusicLibrary.load(
+        context.io,
+        context.allocator,
+        data_dir,
+        "music_library.zon",
+    ) catch |err| {
+        return .{
+            .config = .ok,
+            .data_directory = .ok,
+            .library_file = .{ .failed = err },
+        };
+    };
+    defer library.deinit(context.allocator);
+
+    return .{
+        .config = .ok,
+        .data_directory = .ok,
+        .library_file = .ok,
+    };
+}
+
+fn write_local_doctor_report(writer: *std.Io.Writer, report: LocalDoctorReport) !void {
+    try writer.writeAll("MusicHook doctor\n\n");
+
+    try write_doctor_check(writer, "config", report.config);
+    try write_doctor_check(writer, "data directory", report.data_directory);
+    try write_doctor_check(writer, "library file", report.library_file);
+}
+
+fn write_doctor_check(writer: *std.Io.Writer, label: []const u8, check: DoctorCheck) !void {
+    switch (check) {
+        .ok => try writer.print("{s}: ok\n", .{label}),
+        .skipped => try writer.print("{s}: skipped (prerequisite failed)\n", .{label}),
+        .failed => |err| try writer.print("{s}: failed ({s})\n", .{ label, @errorName(err) }),
+    }
+}
+
+fn execute_init(io: std.Io, allocator: std.mem.Allocator, config_filepath: []const u8) !void {
+    const config_dir = std.fs.path.dirname(config_filepath) orelse return error.InvalidConfigPath;
     const default_data_path = try init_default_data_path(
         io,
         allocator,
@@ -292,9 +376,7 @@ fn execute_init(
     );
     defer allocator.free(data_path);
 
-    const cfg = config.Config{
-        .data_path = data_path,
-    };
+    const cfg = config.Config{ .data_path = data_path };
 
     try cfg.validate();
 
@@ -317,26 +399,13 @@ fn execute_init(
     if (existing_music_library) |library| {
         defer library.deinit(allocator);
     } else {
-        const library = music_library.MusicLibrary{
-            .targets = &.{},
-        };
-
-        try library.write_new(
-            io,
-            allocator,
-            data_dir,
-            "music_library.zon",
-        );
+        const library = music_library.MusicLibrary{ .targets = &.{} };
+        try library.write_new(io, allocator, data_dir, "music_library.zon");
     }
 
     try std.Io.Dir.cwd().createDirPath(io, config_dir);
 
-    try cfg.write(
-        io,
-        allocator,
-        std.Io.Dir.cwd(),
-        config_filepath,
-    );
+    try cfg.write(io, allocator, std.Io.Dir.cwd(), config_filepath);
 
     try writer.interface.print(
         "\nMusicHook is initialised.\n" ++
@@ -347,25 +416,12 @@ fn execute_init(
     try writer.interface.flush();
 }
 
-fn init_default_data_path(
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    config_filepath: []const u8,
-) ![]u8 {
-    const existing_cfg = config.Config.load(
-        io,
-        allocator,
-        std.Io.Dir.cwd(),
-        config_filepath,
-    ) catch |err| switch (err) {
+fn init_default_data_path(io: std.Io, allocator: std.mem.Allocator, config_filepath: []const u8) ![]u8 {
+    const existing_cfg = config.Config.load(io, allocator, std.Io.Dir.cwd(), config_filepath) catch |err| switch (err) {
         error.FileNotFound => {
-            const config_dir = std.fs.path.dirname(config_filepath) orelse
-                return error.InvalidConfigPath;
+            const config_dir = std.fs.path.dirname(config_filepath) orelse return error.InvalidConfigPath;
 
-            return std.fs.path.join(allocator, &.{
-                config_dir,
-                "data",
-            });
+            return std.fs.path.join(allocator, &.{ config_dir, "data" });
         },
         else => |other| return other,
     };
@@ -392,9 +448,7 @@ fn execute_playback_command(
 
     const response = try client.send(
         context.allocator,
-        .{
-            .command = command,
-        },
+        .{ .command = command },
     );
 
     switch (response.status) {
@@ -418,10 +472,7 @@ fn execute_play_direct_url(context: ExecutionContext, url: []const u8) !void {
 
     const response = try client.send(
         context.allocator,
-        .{
-            .command = .play,
-            .url = url,
-        },
+        .{ .command = .play, .url = url },
     );
 
     switch (response.status) {
@@ -444,11 +495,7 @@ fn execute_play_alias(
     return .started;
 }
 
-fn execute_list(
-    context: ExecutionContext,
-    writer: *std.Io.Writer,
-    available_width: usize,
-) !void {
+fn execute_list(context: ExecutionContext, writer: *std.Io.Writer, available_width: usize) !void {
     const cfg = config.Config.load(
         context.io,
         context.allocator,
@@ -560,10 +607,7 @@ fn execute_add(
 
     std.debug.print(
         "Added {s}: {s}\n",
-        .{
-            resolved.target.alias,
-            resolved.target.title,
-        },
+        .{ resolved.target.alias, resolved.target.title },
     );
 }
 
@@ -613,10 +657,7 @@ fn execute_remove(context: ExecutionContext, alias: []const u8) !RemoveResult {
     return if (removed) .removed else .not_found;
 }
 
-fn config_path(
-    allocator: std.mem.Allocator,
-    home: []const u8,
-) std.mem.Allocator.Error![]u8 {
+fn config_path(allocator: std.mem.Allocator, home: []const u8) std.mem.Allocator.Error![]u8 {
     return std.fs.path.join(allocator, &.{
         home,
         ".config",
@@ -626,10 +667,7 @@ fn config_path(
 }
 
 fn is_youtube_domain(domain: []const u8) bool {
-    const targets = [_][]const u8{
-        "youtube.com",
-        "music.youtube.com",
-    };
+    const targets = [_][]const u8{ "youtube.com", "music.youtube.com" };
 
     for (targets) |_target| {
         if (std.mem.eql(u8, domain, _target) or
@@ -664,8 +702,7 @@ fn prompt_line(
     try writer.print("{s}", .{question});
     try writer.flush();
 
-    const line = (try reader.takeDelimiter('\n')) orelse
-        return error.EndOfStream;
+    const line = (try reader.takeDelimiter('\n')) orelse return error.EndOfStream;
 
     const answer = std.mem.trimEnd(u8, line, "\r");
     return allocator.dupe(u8, answer);
@@ -678,20 +715,12 @@ fn prompt_line_with_default(
     label: []const u8,
     default_value: []const u8,
 ) ![]u8 {
-    try writer.print("{s} [{s}]:", .{
-        label,
-        default_value,
-    });
+    try writer.print("{s} [{s}]:", .{ label, default_value });
     try writer.flush();
 
-    const line = (try reader.takeDelimiter('\n')) orelse
-        return error.EndOfStream;
+    const line = (try reader.takeDelimiter('\n')) orelse return error.EndOfStream;
 
-    const answer = std.mem.trimEnd(
-        u8,
-        line,
-        "\r",
-    );
+    const answer = std.mem.trimEnd(u8, line, "\r");
     if (answer.len == 0) return allocator.dupe(u8, default_value);
     return allocator.dupe(u8, answer);
 }
@@ -723,17 +752,8 @@ fn write_target_section(
         &widths,
     );
 
-    try terminal_table.write_header(
-        writer,
-        &LIST_COLUMNS,
-        &widths,
-        LIST_GAP_WIDTH,
-    );
-    try terminal_table.write_separator(
-        writer,
-        &widths,
-        LIST_GAP_WIDTH,
-    );
+    try terminal_table.write_header(writer, &LIST_COLUMNS, &widths, LIST_GAP_WIDTH);
+    try terminal_table.write_separator(writer, &widths, LIST_GAP_WIDTH);
 
     for (targets) |entry| {
         if (entry.kind != requested_kind) continue;
@@ -800,10 +820,7 @@ fn stdout_width(io: std.Io, stdout: std.Io.File) usize {
 
 // SECTION: Test Harness
 test "config_path builds the config location" {
-    const path = try config_path(
-        std.testing.allocator,
-        "/home/shiori",
-    );
+    const path = try config_path(std.testing.allocator, "/home/shiori");
     defer std.testing.allocator.free(path);
 
     try std.testing.expectEqualStrings(
@@ -813,9 +830,7 @@ test "config_path builds the config location" {
 }
 
 test "classify_play_target recognises a YouTube URL" {
-    const result = classify_play_target(
-        "https://www.youtube.com/watch?v=example",
-    );
+    const result = classify_play_target("https://www.youtube.com/watch?v=example");
 
     switch (result) {
         .direct_url => |url| try std.testing.expectEqualStrings(
@@ -827,9 +842,7 @@ test "classify_play_target recognises a YouTube URL" {
 }
 
 test "classify_play_target recognises a YouTube Music URL" {
-    const result = classify_play_target(
-        "https://music.youtube.com/watch?v=example",
-    );
+    const result = classify_play_target("https://music.youtube.com/watch?v=example");
 
     switch (result) {
         .direct_url => |url| try std.testing.expectEqualStrings(
@@ -841,9 +854,7 @@ test "classify_play_target recognises a YouTube Music URL" {
 }
 
 test "classify_play_target recognises an Unsupported URL" {
-    const result = classify_play_target(
-        "https://www.notyoutube.com/watch?v=example",
-    );
+    const result = classify_play_target("https://www.notyoutube.com/watch?v=example");
 
     switch (result) {
         .unsupported_url => |url| try std.testing.expectEqualStrings(
@@ -855,9 +866,7 @@ test "classify_play_target recognises an Unsupported URL" {
 }
 
 test "classify_play_target recognises an alias" {
-    const result = classify_play_target(
-        "dusk",
-    );
+    const result = classify_play_target("dusk");
 
     switch (result) {
         .alias => |alias| try std.testing.expectEqualStrings(
@@ -869,9 +878,7 @@ test "classify_play_target recognises an alias" {
 }
 
 test "prompt_line writes a question and returns the answer" {
-    var reader = std.Io.Reader.fixed(
-        "/home/shiori/.config/music_hook/data\n",
-    );
+    var reader = std.Io.Reader.fixed("/home/shiori/.config/music_hook/data\n");
 
     var output_buffer: [256]u8 = undefined;
     var writer = std.Io.Writer.fixed(&output_buffer);
@@ -884,20 +891,12 @@ test "prompt_line writes a question and returns the answer" {
     );
     defer std.testing.allocator.free(answer);
 
-    try std.testing.expectEqualStrings(
-        "/home/shiori/.config/music_hook/data",
-        answer,
-    );
-    try std.testing.expectEqualStrings(
-        "Where would you like to store your data library? ",
-        writer.buffered(),
-    );
+    try std.testing.expectEqualStrings("/home/shiori/.config/music_hook/data", answer);
+    try std.testing.expectEqualStrings("Where would you like to store your data library? ", writer.buffered());
 }
 
 test "prompt_line_with_default accepts \n" {
-    var reader = std.Io.Reader.fixed(
-        "\n",
-    );
+    var reader = std.Io.Reader.fixed("\n");
 
     var output_buffer: [256]u8 = undefined;
     var writer = std.Io.Writer.fixed(&output_buffer);
@@ -911,20 +910,12 @@ test "prompt_line_with_default accepts \n" {
     );
     defer std.testing.allocator.free(answer);
 
-    try std.testing.expectEqualStrings(
-        "DEFAULT",
-        answer,
-    );
-    try std.testing.expectEqualStrings(
-        "LABEL [DEFAULT]:",
-        writer.buffered(),
-    );
+    try std.testing.expectEqualStrings("DEFAULT", answer);
+    try std.testing.expectEqualStrings("LABEL [DEFAULT]:", writer.buffered());
 }
 
 test "prompt_line_with_default overrides default" {
-    var reader = std.Io.Reader.fixed(
-        "NOT_DEFAULT",
-    );
+    var reader = std.Io.Reader.fixed("NOT_DEFAULT");
 
     var output_buffer: [256]u8 = undefined;
     var writer = std.Io.Writer.fixed(&output_buffer);
@@ -938,14 +929,8 @@ test "prompt_line_with_default overrides default" {
     );
     defer std.testing.allocator.free(answer);
 
-    try std.testing.expectEqualStrings(
-        "NOT_DEFAULT",
-        answer,
-    );
-    try std.testing.expectEqualStrings(
-        "LABEL [DEFAULT]:",
-        writer.buffered(),
-    );
+    try std.testing.expectEqualStrings("NOT_DEFAULT", answer);
+    try std.testing.expectEqualStrings("LABEL [DEFAULT]:", writer.buffered());
 }
 
 test "direct URL play succeeds when the host returns ok" {
@@ -1186,15 +1171,9 @@ test "remove deletes an existing alias" {
     defer temp_dir.cleanup();
 
     var data_path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const data_path_length = try temp_dir.dir.realPath(
-        std.testing.io,
-        &data_path_buffer,
-    );
+    const data_path_length = try temp_dir.dir.realPath(std.testing.io, &data_path_buffer);
 
-    const data_path = try std.testing.allocator.dupe(
-        u8,
-        data_path_buffer[0..data_path_length],
-    );
+    const data_path = try std.testing.allocator.dupe(u8, data_path_buffer[0..data_path_length]);
     defer std.testing.allocator.free(data_path);
 
     const config_filepath = try std.fs.path.join(
@@ -1267,10 +1246,7 @@ test "remove leaves the library unchanged for a missing alias" {
     defer temp_dir.cleanup();
 
     var data_path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const data_path_length = try temp_dir.dir.realPath(
-        std.testing.io,
-        &data_path_buffer,
-    );
+    const data_path_length = try temp_dir.dir.realPath(std.testing.io, &data_path_buffer);
 
     const data_path = try std.testing.allocator.dupe(
         u8,
@@ -1494,6 +1470,194 @@ test "list prints empty playlist and track sections" {
             "No playlists saved.\n\n" ++
             "TRACKS\n\n" ++
             "No tracks saved.\n\n",
+        output.writer.buffered(),
+    );
+}
+
+test "doctor skips dependent checks when config is missing" {
+    var temp_dir = std.testing.tmpDir(.{});
+    defer temp_dir.cleanup();
+
+    var data_path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const data_path_length = try temp_dir.dir.realPath(
+        std.testing.io,
+        &data_path_buffer,
+    );
+
+    const data_path = data_path_buffer[0..data_path_length];
+
+    const config_filepath = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ data_path, "missing-config.zon" },
+    );
+    defer std.testing.allocator.free(config_filepath);
+
+    const report = inspect_local_doctor(.{
+        .io = std.testing.io,
+        .allocator = std.testing.allocator,
+        .config_filepath = config_filepath,
+        .xdg_runtime_dir = null,
+        .temp_dir = null,
+    });
+
+    try std.testing.expectEqual(.failed, std.meta.activeTag(report.config));
+    try std.testing.expectEqual(.skipped, std.meta.activeTag(report.data_directory));
+    try std.testing.expectEqual(.skipped, std.meta.activeTag(report.library_file));
+    try std.testing.expect(!report.is_healthy());
+}
+
+test "doctor reports a missing configured data directory" {
+    var temp_dir = std.testing.tmpDir(.{});
+    defer temp_dir.cleanup();
+
+    var root_path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root_path_length = try temp_dir.dir.realPath(
+        std.testing.io,
+        &root_path_buffer,
+    );
+    const root_path = root_path_buffer[0..root_path_length];
+
+    const data_path = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ root_path, "missing-data-directory" },
+    );
+    defer std.testing.allocator.free(data_path);
+
+    const config_filepath = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ root_path, "config.zon" },
+    );
+    defer std.testing.allocator.free(config_filepath);
+
+    const cfg = config.Config{ .data_path = data_path };
+    try cfg.write_new(
+        std.testing.io,
+        std.testing.allocator,
+        std.Io.Dir.cwd(),
+        config_filepath,
+    );
+
+    const report = inspect_local_doctor(.{
+        .io = std.testing.io,
+        .allocator = std.testing.allocator,
+        .config_filepath = config_filepath,
+        .xdg_runtime_dir = null,
+        .temp_dir = null,
+    });
+
+    try std.testing.expectEqual(.ok, std.meta.activeTag(report.config));
+    try std.testing.expectEqual(.failed, std.meta.activeTag(report.data_directory));
+    try std.testing.expectEqual(.skipped, std.meta.activeTag(report.library_file));
+    try std.testing.expect(!report.is_healthy());
+}
+
+test "doctor reports a missing library file" {
+    var temp_dir = std.testing.tmpDir(.{});
+    defer temp_dir.cleanup();
+
+    var data_path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const data_path_length = try temp_dir.dir.realPath(
+        std.testing.io,
+        &data_path_buffer,
+    );
+    const data_path = data_path_buffer[0..data_path_length];
+
+    const config_filepath = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ data_path, "config.zon" },
+    );
+    defer std.testing.allocator.free(config_filepath);
+
+    const cfg = config.Config{ .data_path = data_path };
+    try cfg.write_new(
+        std.testing.io,
+        std.testing.allocator,
+        std.Io.Dir.cwd(),
+        config_filepath,
+    );
+
+    const report = inspect_local_doctor(.{
+        .io = std.testing.io,
+        .allocator = std.testing.allocator,
+        .config_filepath = config_filepath,
+        .xdg_runtime_dir = null,
+        .temp_dir = null,
+    });
+
+    try std.testing.expectEqual(.ok, std.meta.activeTag(report.config));
+    try std.testing.expectEqual(.ok, std.meta.activeTag(report.data_directory));
+    try std.testing.expectEqual(.failed, std.meta.activeTag(report.library_file));
+    try std.testing.expect(!report.is_healthy());
+}
+
+test "doctor reports healthy local configuration and library" {
+    var temp_dir = std.testing.tmpDir(.{});
+    defer temp_dir.cleanup();
+
+    const config_filepath = try test_support.prepare_list_test_library(
+        &temp_dir,
+        &.{},
+    );
+    defer std.testing.allocator.free(config_filepath);
+
+    const report = inspect_local_doctor(.{
+        .io = std.testing.io,
+        .allocator = std.testing.allocator,
+        .config_filepath = config_filepath,
+        .xdg_runtime_dir = null,
+        .temp_dir = null,
+    });
+
+    try std.testing.expectEqual(.ok, std.meta.activeTag(report.config));
+    try std.testing.expectEqual(.ok, std.meta.activeTag(report.data_directory));
+    try std.testing.expectEqual(.ok, std.meta.activeTag(report.library_file));
+    try std.testing.expect(report.is_healthy());
+}
+
+test "doctor renders a healthy local report" {
+    var output = std.Io.Writer.Allocating.init(
+        std.testing.allocator,
+    );
+    defer output.deinit();
+
+    try write_local_doctor_report(
+        &output.writer,
+        .{
+            .config = .ok,
+            .data_directory = .ok,
+            .library_file = .ok,
+        },
+    );
+
+    try std.testing.expectEqualStrings(
+        "MusicHook doctor\n\n" ++
+            "config: ok\n" ++
+            "data directory: ok\n" ++
+            "library file: ok\n",
+        output.writer.buffered(),
+    );
+}
+
+test "doctor renders failed and skipped local checks" {
+    var output = std.Io.Writer.Allocating.init(
+        std.testing.allocator,
+    );
+    defer output.deinit();
+
+    try write_local_doctor_report(
+        &output.writer,
+        .{
+            .config = .{ .failed = error.FileNotFound },
+            .data_directory = .skipped,
+            .library_file = .skipped,
+        },
+    );
+
+    try std.testing.expectEqualStrings(
+        "MusicHook doctor\n\n" ++
+            "config: failed (FileNotFound)\n" ++
+            "data directory: skipped (prerequisite failed)\n" ++
+            "library file: skipped (prerequisite failed)\n",
         output.writer.buffered(),
     );
 }

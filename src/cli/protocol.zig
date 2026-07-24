@@ -2,14 +2,13 @@ const std = @import("std");
 
 pub const Command = enum {
     init,
-    sync,
     list,
     play,
     add,
     remove,
     pause,
     @"resume",
-    status,
+    doctor,
 };
 
 pub const AddRequest = struct {
@@ -19,14 +18,13 @@ pub const AddRequest = struct {
 
 pub const Request = union(Command) {
     init: void,
-    sync: void,
     list: void,
     play: []const u8,
     add: AddRequest,
     remove: []const u8,
     pause: void,
     @"resume": void,
-    status: void,
+    doctor: void,
 };
 
 test "play request stores its target" {
