@@ -27,9 +27,7 @@ pub fn main(init: std.process.Init) !u8 {
     var socket_dir = try std.Io.Dir.cwd().createDirPathOpen(
         io,
         socket_dir_path,
-        .{
-            .permissions = .fromMode(0o700),
-        },
+        .{ .permissions = .fromMode(0o700) },
     );
     defer socket_dir.close(io);
 
@@ -81,15 +79,10 @@ fn relay_one(
     native_reader: *std.Io.Reader,
     native_writer: *std.Io.Writer,
 ) !void {
-    const request_frame = try native_message.read_frame(
-        allocator,
-        client_reader,
-    );
+    const request_frame = try native_message.read_frame(allocator, client_reader);
     defer allocator.free(request_frame);
 
-    const request_message = try native_message.NativeMessage.decode(
-        request_frame,
-    );
+    const request_message = try native_message.NativeMessage.decode(request_frame);
 
     var parsed_request = try std.json.parseFromSlice(
         extension_protocol.Request,
@@ -101,21 +94,12 @@ fn relay_one(
 
     try parsed_request.value.validate();
 
-    try native_message.write_frame(
-        native_writer,
-        request_frame,
-    );
+    try native_message.write_frame(native_writer, request_frame);
 
-    const response_frame = try native_message.read_frame(
-        allocator,
-        native_reader,
-    );
+    const response_frame = try native_message.read_frame(allocator, native_reader);
     defer allocator.free(response_frame);
 
-    const response_message = try native_message.NativeMessage.decode(
-        response_frame,
-    );
-
+    const response_message = try native_message.NativeMessage.decode(response_frame);
     var parsed_response = try std.json.parseFromSlice(
         extension_protocol.Response,
         allocator,
@@ -125,11 +109,7 @@ fn relay_one(
     defer parsed_response.deinit();
 
     try parsed_response.value.validate();
-
-    try native_message.write_frame(
-        client_writer,
-        response_frame,
-    );
+    try native_message.write_frame(client_writer, response_frame);
 }
 
 // SECTION: tests
@@ -142,10 +122,7 @@ test "runtime socket path prefers XDG_RUNTIME_DIR" {
     );
     defer std.testing.allocator.free(path);
 
-    try std.testing.expectEqualStrings(
-        "/run/user/1000/music_hook/host.sock",
-        path,
-    );
+    try std.testing.expectEqualStrings("/run/user/1000/music_hook/host.sock", path);
 }
 
 test "runtime socket path falls back to TMPDIR" {
@@ -156,10 +133,7 @@ test "runtime socket path falls back to TMPDIR" {
     );
     defer std.testing.allocator.free(path);
 
-    try std.testing.expectEqualStrings(
-        "/tmp/user/music_hook/host.sock",
-        path,
-    );
+    try std.testing.expectEqualStrings("/tmp/user/music_hook/host.sock", path);
 }
 
 test "runtime socket path ignores a relative XDG_RUNTIME_DIR" {
@@ -170,10 +144,7 @@ test "runtime socket path ignores a relative XDG_RUNTIME_DIR" {
     );
     defer std.testing.allocator.free(path);
 
-    try std.testing.expectEqualStrings(
-        "/tmp/user/music_hook/host.sock",
-        path,
-    );
+    try std.testing.expectEqualStrings("/tmp/user/music_hook/host.sock", path);
 }
 
 test "runtime socket path rejects missing runtime directories" {
@@ -187,20 +158,13 @@ test "runtime socket path rejects missing runtime directories" {
     );
 }
 test "relays a play request to the extension and its response to the client" {
-    const request_json =
-        "{\"command\":\"play\",\"url\":\"https://music.youtube.com/watch?v=example\"}";
+    const request_json = "{\"command\":\"play\",\"url\":\"https://music.youtube.com/watch?v=example\"}";
+    const response_json = "{\"status\":\"ok\",\"error_code\":null}";
 
-    const response_json =
-        "{\"status\":\"ok\",\"error_code\":null}";
-
-    const request_frame = try (native_message.NativeMessage{
-        .json_bytes = request_json,
-    }).encode(std.testing.allocator);
+    const request_frame = try (native_message.NativeMessage{ .json_bytes = request_json }).encode(std.testing.allocator);
     defer std.testing.allocator.free(request_frame);
 
-    const response_frame = try (native_message.NativeMessage{
-        .json_bytes = response_json,
-    }).encode(std.testing.allocator);
+    const response_frame = try (native_message.NativeMessage{ .json_bytes = response_json }).encode(std.testing.allocator);
     defer std.testing.allocator.free(response_frame);
 
     var client_reader = std.Io.Reader.fixed(request_frame);
@@ -220,25 +184,13 @@ test "relays a play request to the extension and its response to the client" {
         &native_writer,
     );
 
-    try std.testing.expectEqualSlices(
-        u8,
-        request_frame,
-        native_writer.buffered(),
-    );
-
-    try std.testing.expectEqualSlices(
-        u8,
-        response_frame,
-        client_writer.buffered(),
-    );
+    try std.testing.expectEqualSlices(u8, request_frame, native_writer.buffered());
+    try std.testing.expectEqualSlices(u8, response_frame, client_writer.buffered());
 }
 
 test "rejects an invalid client request before forwarding it" {
     const request_json = "{\"command\":\"play\",\"url\":\"\"}";
-
-    const request_frame = try (native_message.NativeMessage{
-        .json_bytes = request_json,
-    }).encode(std.testing.allocator);
+    const request_frame = try (native_message.NativeMessage{ .json_bytes = request_json }).encode(std.testing.allocator);
     defer std.testing.allocator.free(request_frame);
 
     var client_reader = std.Io.Reader.fixed(request_frame);
@@ -261,27 +213,18 @@ test "rejects an invalid client request before forwarding it" {
         ),
     );
 
-    try std.testing.expectEqual(
-        @as(usize, 0),
-        native_writer.buffered().len,
-    );
+    try std.testing.expectEqual(@as(usize, 0), native_writer.buffered().len);
 }
 
 test "rejects an invalid extension response before returning it to the client" {
-    const request_json =
-        "{\"command\":\"play\",\"url\":\"https://music.youtube.com/watch?v=example\"}";
+    const request_json = "{\"command\":\"play\",\"url\":\"https://music.youtube.com/watch?v=example\"}";
 
-    const response_json =
-        "{\"status\":\"failed\",\"error_code\":null}";
+    const response_json = "{\"status\":\"failed\",\"error_code\":null}";
 
-    const request_frame = try (native_message.NativeMessage{
-        .json_bytes = request_json,
-    }).encode(std.testing.allocator);
+    const request_frame = try (native_message.NativeMessage{ .json_bytes = request_json }).encode(std.testing.allocator);
     defer std.testing.allocator.free(request_frame);
 
-    const response_frame = try (native_message.NativeMessage{
-        .json_bytes = response_json,
-    }).encode(std.testing.allocator);
+    const response_frame = try (native_message.NativeMessage{ .json_bytes = response_json }).encode(std.testing.allocator);
     defer std.testing.allocator.free(response_frame);
 
     var client_reader = std.Io.Reader.fixed(request_frame);
@@ -304,16 +247,8 @@ test "rejects an invalid extension response before returning it to the client" {
         ),
     );
 
-    try std.testing.expectEqualSlices(
-        u8,
-        request_frame,
-        native_writer.buffered(),
-    );
-
-    try std.testing.expectEqual(
-        @as(usize, 0),
-        client_writer.buffered().len,
-    );
+    try std.testing.expectEqualSlices(u8, request_frame, native_writer.buffered());
+    try std.testing.expectEqual(@as(usize, 0), client_writer.buffered().len);
 }
 
 test "removes a stale Unix socket before listening" {
@@ -321,10 +256,7 @@ test "removes a stale Unix socket before listening" {
     defer temp_dir.cleanup();
 
     var runtime_dir_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const runtime_dir_length = try temp_dir.dir.realPath(
-        std.testing.io,
-        &runtime_dir_buffer,
-    );
+    const runtime_dir_length = try temp_dir.dir.realPath(std.testing.io, &runtime_dir_buffer);
 
     const socket_path = try utils.runtime_socket_path(
         std.testing.allocator,
@@ -336,28 +268,51 @@ test "removes a stale Unix socket before listening" {
     var socket_dir = try temp_dir.dir.createDirPathOpen(
         std.testing.io,
         "music_hook",
-        .{
-            .permissions = .fromMode(0o700),
-        },
+        .{ .permissions = .fromMode(0o700) },
     );
     socket_dir.close(std.testing.io);
 
     const socket_address = try std.Io.net.UnixAddress.init(socket_path);
 
-    var stale_listener = try socket_address.listen(
-        std.testing.io,
-        .{},
-    );
+    var stale_listener = try socket_address.listen(std.testing.io, .{});
     stale_listener.deinit(std.testing.io);
 
     try remove_stale_socket(std.testing.io, socket_path);
 
-    var listener = try socket_address.listen(
-        std.testing.io,
-        .{},
-    );
+    var listener = try socket_address.listen(std.testing.io, .{});
     defer {
         listener.deinit(std.testing.io);
         std.Io.Dir.deleteFileAbsolute(std.testing.io, socket_path) catch {};
     }
+}
+
+test "relays a ping request to the extension and its response to the client" {
+    const request_json = "{\"command\":\"ping\",\"url\":null}";
+    const response_json = "{\"status\":\"ok\",\"error_code\":null}";
+
+    const request_frame = try (native_message.NativeMessage{ .json_bytes = request_json }).encode(std.testing.allocator);
+    defer std.testing.allocator.free(request_frame);
+
+    const response_frame = try (native_message.NativeMessage{ .json_bytes = response_json }).encode(std.testing.allocator);
+    defer std.testing.allocator.free(response_frame);
+
+    var client_reader = std.Io.Reader.fixed(request_frame);
+    var native_reader = std.Io.Reader.fixed(response_frame);
+
+    var client_output_buffer: [256]u8 = undefined;
+    var client_writer = std.Io.Writer.fixed(&client_output_buffer);
+
+    var native_output_buffer: [256]u8 = undefined;
+    var native_writer = std.Io.Writer.fixed(&native_output_buffer);
+
+    try relay_one(
+        std.testing.allocator,
+        &client_reader,
+        &client_writer,
+        &native_reader,
+        &native_writer,
+    );
+
+    try std.testing.expectEqualSlices(u8, request_frame, native_writer.buffered());
+    try std.testing.expectEqualSlices(u8, response_frame, client_writer.buffered());
 }
