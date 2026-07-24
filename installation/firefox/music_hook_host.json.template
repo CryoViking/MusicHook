@@ -1,5 +1,5 @@
 {
-  "name": "music_hook_host_deb",
+  "name": "music_hook_host",
   "description": "MusicHook native messaging host (DEV)",
   "path": "__MUSIC_HOOK_HOST_PATH__",
   "type": "stdio",

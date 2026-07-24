@@ -1,0 +1,85 @@
+class MusicHook < Formula
+  desc "Local CLI bridge for controlling YouTube playback through Zen"
+  homepage "__MUSIC_HOOK_HOMEPAGE__"
+  url "__MUSIC_HOOK_SOURCE_URL__"
+  sha256 "__MUSIC_HOOK_SOURCE_SHA256__"
+  version "__MUSIC_HOOK_VERSION__"
+
+  depends_on :macos
+  depends_on "zig" => :build
+
+  def install
+    system "zig", "build", "-Doptimize=ReleaseSafe"
+
+    bin.install "zig-out/bin/music"
+    libexec.install "zig-out/bin/music-hook-host"
+
+    native_template_dir = share/"music_hook"
+    native_template_dir.install \
+      "package_resources/production_native_host/" \
+      "music_hook_host.json.template"
+
+    zen_installer = buildpath/
+      "package_resources/homebrew/" \
+      "music-hook-install-zen.sh.template"
+
+    inreplace zen_installer do |contents|
+      contents.gsub!(
+        "__MUSIC_HOOK_INSTALLED_HOST_PATH__",
+        (opt_libexec/"music-hook-host").to_s,
+      )
+      contents.gsub!(
+        "__MUSIC_HOOK_NATIVE_MANIFEST_TEMPLATE_PATH__",
+        (
+          native_template_dir/
+            "music_hook_host.json.template"
+        ).to_s,
+      )
+    end
+
+    zen_installer.chmod 0755
+    bin.install zen_installer => "music-hook-install-zen"
+
+    zen_uninstaller = buildpath/
+      "package_resources/homebrew/" \
+      "music-hook-uninstall-zen.sh"
+
+    zen_uninstaller.chmod 0755
+    bin.install zen_uninstaller => "music-hook-uninstall-zen"
+  end
+
+  def caveats
+    <<~EOS
+      To connect MusicHook to Zen, install its native-host manifest:
+
+        music-hook-install-zen
+
+      Then download the Mozilla-signed MusicHook XPI from the GitHub Release
+      matching this version, and install it in Zen:
+
+        1. Open about:addons.
+        2. Select the gear menu, then "Install Add-on From File…".
+        3. Select the signed XPI you downloaded.
+
+      Reload the extension after installing it.
+
+      To remove only the Zen native-host registration:
+
+        music-hook-uninstall-zen
+    EOS
+  end
+
+  test do
+    output = pipe_output(
+      "#{bin}/music init",
+      "\n",
+    )
+
+    assert_match "MusicHook is initialised.", output
+
+    assert_predicate(
+      testpath/".config/music_hook/data/music_library.zon",
+      :exist?,
+    )
+  end
+end

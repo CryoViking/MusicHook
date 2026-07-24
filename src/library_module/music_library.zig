@@ -174,11 +174,7 @@ pub const MusicLibrary = struct {
         self: MusicLibrary,
         alias: []const u8,
     ) ?*const target.Target {
-        for (self.targets) |*item| {
-            if (std.mem.eql(u8, item.alias, alias)) {
-                return item;
-            }
-        }
+        for (self.targets) |*item| if (std.mem.eql(u8, item.alias, alias)) return item;
         return null;
     }
 

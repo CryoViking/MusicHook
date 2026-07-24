@@ -40,6 +40,30 @@ Native messaging is available from background extension code, not content
 scripts. If MusicHook later needs page-level DOM control, a content script must
 communicate with the background script using ordinary extension messages.
 
+## Production signing and updates
+
+Zen release builds require Mozilla-signed extensions. MusicHook's production
+manifest therefore has a stable add-on ID and an HTTPS `update_url`. The
+unsigned package made by `scripts/package-production-extension.sh` is only an
+AMO submission artifact; it must not be installed in Zen.
+
+After AMO signs an unlisted submission, use
+`scripts/prepare-signed-extension-release.sh` to prepare three release assets:
+
+- the signed XPI for a GitHub Release;
+- its SHA-256 checksum; and
+- `updates.json` for the HTTPS URL embedded in the production manifest.
+
+`scripts/upload-signed-extension-release.sh` uploads the signed XPI and its
+checksum to an existing GitHub Release through the authenticated GitHub CLI.
+It can create the release with `--create`, but deliberately does not publish
+the update manifest: GitHub Pages deployment remains an explicit reviewed
+commit because it is the browser's long-lived update authority.
+
+The release's XPI and `updates.json` must describe the same add-on ID and
+version. Each later extension release needs a higher manifest version, a new
+Mozilla signature, a new checksum, and a replacement update manifest.
+
 ## Native-host manifest restrictions
 
 Firefox launches `music-hook-host` from a separate, machine-local manifest.
@@ -120,3 +144,6 @@ content-script playback control in this first slice.
 - [`tabs.update()`](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/tabs/update)
 - [`HTMLMediaElement.play()`](https://developer.mozilla.org/en-US/docs/Web/API/HTMLMediaElement/play)
 - [Firefox autoplay settings](https://support.mozilla.org/en-US/kb/block-autoplay)
+- [Mozilla signing and distribution](https://extensionworkshop.com/documentation/publish/signing-and-distribution-overview/)
+- [Self-distribution](https://extensionworkshop.com/documentation/publish/self-distribution/)
+- [Extension update manifests](https://extensionworkshop.com/documentation/manage/updating-your-extension/)

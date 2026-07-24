@@ -1,0 +1,13 @@
+{
+  "addons": {
+    "__MUSIC_HOOK_EXTENSION_ID__": {
+      "updates": [
+        {
+          "version": "__MUSIC_HOOK_EXTENSION_VERSION__",
+          "update_link": "__MUSIC_HOOK_EXTENSION_XPI_URL__",
+          "update_hash": "sha256:__MUSIC_HOOK_EXTENSION_XPI_SHA256__"
+        }
+      ]
+    }
+  }
+}
