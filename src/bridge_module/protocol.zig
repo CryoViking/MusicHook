@@ -4,6 +4,7 @@ pub const Command = enum {
     play,
     pause,
     @"resume",
+    ping,
 };
 
 //   Get the specified package
@@ -23,7 +24,7 @@ pub const Request = struct {
                 const url = self.url orelse return error.MissingUrl;
                 if (url.len == 0) return RequestError.EmptyUrl;
             },
-            .pause, .@"resume" => {
+            .pause, .@"resume", .ping => {
                 if (self.url != null) return error.UnexpectedUrl;
             },
         }
@@ -63,85 +64,42 @@ pub const Response = struct {
 };
 
 test "play request accepts a URL" {
-    const request = Request{
-        .command = .play,
-        .url = "https://music.youtube.com/watch?v=example",
-    };
-
+    const request = Request{ .command = .play, .url = "https://music.youtube.com/watch?v=example" };
     try request.validate();
 }
 
 test "play request rejects a missing URL" {
-    const request = Request{
-        .command = .play,
-    };
-
-    try std.testing.expectError(
-        RequestError.MissingUrl,
-        request.validate(),
-    );
+    const request = Request{ .command = .play };
+    try std.testing.expectError(RequestError.MissingUrl, request.validate());
 }
 
 test "play request rejects an empty URL" {
-    const request = Request{
-        .command = .play,
-        .url = "",
-    };
-
-    try std.testing.expectError(
-        RequestError.EmptyUrl,
-        request.validate(),
-    );
+    const request = Request{ .command = .play, .url = "" };
+    try std.testing.expectError(RequestError.EmptyUrl, request.validate());
 }
 
 test "pause request accepts no URL" {
-    const request = Request{
-        .command = .pause,
-    };
-
+    const request = Request{ .command = .pause };
     try request.validate();
 }
 
 test "resume request accepts no URL" {
-    const request = Request{
-        .command = .@"resume",
-    };
-
+    const request = Request{ .command = .@"resume" };
     try request.validate();
 }
 
 test "pause request rejects a URL" {
-    const request = Request{
-        .command = .pause,
-        .url = "https://music.youtube.com/watch?v=example",
-    };
-
-    try std.testing.expectError(
-        RequestError.UnexpectedUrl,
-        request.validate(),
-    );
+    const request = Request{ .command = .pause, .url = "https://music.youtube.com/watch?v=example" };
+    try std.testing.expectError(RequestError.UnexpectedUrl, request.validate());
 }
 
 test "resume request rejects a URL" {
-    const request = Request{
-        .command = .@"resume",
-        .url = "https://music.youtube.com/watch?v=example",
-    };
-
-    try std.testing.expectError(
-        RequestError.UnexpectedUrl,
-        request.validate(),
-    );
+    const request = Request{ .command = .@"resume", .url = "https://music.youtube.com/watch?v=example" };
+    try std.testing.expectError(RequestError.UnexpectedUrl, request.validate());
 }
 test "failed response requires an error code" {
-    const response = Response{
-        .status = .failed,
-    };
-
-    try std.testing.expectError(
-        ResponseError.MissingErrorCode,
-        response.validate(),
-    );
+    const response = Response{ .status = .failed };
+    try std.testing.expectError(ResponseError.MissingErrorCode, response.validate());
 }
 
 test ".ok response containing an error_code must return UnexpectedErrorCode" {
@@ -157,9 +115,7 @@ test ".ok response containing an error_code must return UnexpectedErrorCode" {
 }
 
 test "play request encodes as JSON" {
-    var output = std.Io.Writer.Allocating.init(
-        std.testing.allocator,
-    );
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
     defer output.deinit();
 
     const request = Request{
@@ -167,12 +123,7 @@ test "play request encodes as JSON" {
         .url = "https://music.youtube.com/watch?v=example",
     };
 
-    try std.json.Stringify.value(
-        request,
-        .{},
-        &output.writer,
-    );
-
+    try std.json.Stringify.value(request, .{}, &output.writer);
     try std.testing.expectEqualStrings(
         "{\"command\":\"play\",\"url\":\"https://music.youtube.com/watch?v=example\"}",
         output.written(),
@@ -180,12 +131,9 @@ test "play request encodes as JSON" {
 }
 
 test "JSON Request decodes successfully" {
-    const expected_request = Request{
-        .command = .play,
-        .url = "https://music.youtube.com/watch?v=example",
-    };
-
+    const expected_request = Request{ .command = .play, .url = "https://music.youtube.com/watch?v=example" };
     const payload = "{\"command\":\"play\",\"url\":\"https://music.youtube.com/watch?v=example\"}";
+
     const actual_request = try std.json.parseFromSlice(
         Request,
         std.testing.allocator,
@@ -194,31 +142,18 @@ test "JSON Request decodes successfully" {
     );
     defer actual_request.deinit();
 
-    try std.testing.expectEqual(
-        expected_request.command,
-        actual_request.value.command,
-    );
-
-    try std.testing.expectEqualStrings(
-        expected_request.url.?,
-        actual_request.value.url.?,
-    );
+    try std.testing.expectEqual(expected_request.command, actual_request.value.command);
+    try std.testing.expectEqualStrings(expected_request.url.?, actual_request.value.url.?);
 }
 
 test "encodes and decodes an ok response" {
-    const response = Response{
-        .status = .ok,
-    };
-
+    const response = Response{ .status = .ok };
     var output = std.Io.Writer.Allocating.init(std.testing.allocator);
     defer output.deinit();
 
     try std.json.Stringify.value(response, .{}, &output.writer);
 
-    try std.testing.expectEqualStrings(
-        "{\"status\":\"ok\",\"error_code\":null}",
-        output.written(),
-    );
+    try std.testing.expectEqualStrings("{\"status\":\"ok\",\"error_code\":null}", output.written());
 
     var parsed = try std.json.parseFromSlice(
         Response,
@@ -263,25 +198,13 @@ test "encodes and decodes a failed response" {
 }
 
 test "pause request encodes as JSON" {
-    var output = std.Io.Writer.Allocating.init(
-        std.testing.allocator,
-    );
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
     defer output.deinit();
 
-    const request = Request{
-        .command = .pause,
-    };
+    const request = Request{ .command = .pause };
 
-    try std.json.Stringify.value(
-        request,
-        .{},
-        &output.writer,
-    );
-
-    try std.testing.expectEqualStrings(
-        "{\"command\":\"pause\",\"url\":null}",
-        output.written(),
-    );
+    try std.json.Stringify.value(request, .{}, &output.writer);
+    try std.testing.expectEqualStrings("{\"command\":\"pause\",\"url\":null}", output.written());
 }
 
 test "JSON pause Request decodes successfully" {
@@ -295,10 +218,29 @@ test "JSON pause Request decodes successfully" {
     );
     defer request.deinit();
 
-    try std.testing.expectEqual(
-        Command.pause,
-        request.value.command,
-    );
+    try std.testing.expectEqual(Command.pause, request.value.command);
     try std.testing.expect(request.value.url == null);
     try request.value.validate();
+}
+
+test "ping request accepts no URL" {
+    const request = Request{ .command = .ping };
+    try request.validate();
+}
+
+test "ping request rejects a URL" {
+    const request = Request{ .command = .ping, .url = "https://music.youtube.com/watch?v=example" };
+
+    try std.testing.expectError(
+        RequestError.UnexpectedUrl,
+        request.validate(),
+    );
+}
+
+test "ping request encodes as JSON" {
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+
+    try std.json.Stringify.value(Request{ .command = .ping }, .{}, &output.writer);
+    try std.testing.expectEqualStrings("{\"command\":\"ping\",\"url\":null}", output.written());
 }

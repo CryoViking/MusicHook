@@ -126,6 +126,12 @@ async function handle_native_request(port, request) {
       case "resume":
         response = await resume_last_controlled_tab();
         break;
+      case "ping":
+        response = {
+          status: "ok",
+          error_code: null,
+        };
+        break;
       default:
         throw new Error("Unknown MusicHook command.");
     }

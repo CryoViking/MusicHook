@@ -137,9 +137,7 @@ pub const FakeHost = struct {
         );
         defer std.testing.allocator.free(request_frame);
 
-        const request_message = try bridge_frame.NativeMessage.decode(
-            request_frame,
-        );
+        const request_message = try bridge_frame.NativeMessage.decode(request_frame);
 
         var parsed_request = try std.json.parseFromSlice(
             bridge_protocol.Request,
@@ -150,26 +148,18 @@ pub const FakeHost = struct {
         defer parsed_request.deinit();
 
         try parsed_request.value.validate();
-        try std.testing.expectEqual(
-            self.expected_request.command,
-            parsed_request.value.command,
-        );
+        try std.testing.expectEqual(self.expected_request.command, parsed_request.value.command);
         switch (self.expected_request.command) {
             .play => try std.testing.expectEqualStrings(
                 self.expected_request.url.?,
                 parsed_request.value.url.?,
             ),
-            .pause, .@"resume" => try std.testing.expect(
-                parsed_request.value.url == null,
-            ),
+            .pause, .@"resume", .ping => try std.testing.expect(parsed_request.value.url == null),
         }
 
         var output_buffer: [1024]u8 = undefined;
         var writer = client.writer(std.testing.io, &output_buffer);
-        try bridge_frame.write_frame(
-            &writer.interface,
-            self.response_frame,
-        );
+        try bridge_frame.write_frame(&writer.interface, self.response_frame);
     }
 };
 
@@ -178,25 +168,14 @@ pub fn prepare_list_test_library(
     targets: []const target.Target,
 ) ![]u8 {
     var data_path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const data_path_length = try temp_dir.dir.realPath(
-        std.testing.io,
-        &data_path_buffer,
-    );
+    const data_path_length = try temp_dir.dir.realPath(std.testing.io, &data_path_buffer);
 
-    const data_path = try std.testing.allocator.dupe(
-        u8,
-        data_path_buffer[0..data_path_length],
-    );
+    const data_path = try std.testing.allocator.dupe(u8, data_path_buffer[0..data_path_length]);
     defer std.testing.allocator.free(data_path);
 
-    const config_filepath = try std.fs.path.join(
-        std.testing.allocator,
-        &.{ data_path, "config.zon" },
-    );
+    const config_filepath = try std.fs.path.join(std.testing.allocator, &.{ data_path, "config.zon" });
 
-    const cfg = config.Config{
-        .data_path = data_path,
-    };
+    const cfg = config.Config{ .data_path = data_path };
     try cfg.write_new(
         std.testing.io,
         std.testing.allocator,
@@ -204,9 +183,7 @@ pub fn prepare_list_test_library(
         config_filepath,
     );
 
-    const library = music_library.MusicLibrary{
-        .targets = targets,
-    };
+    const library = music_library.MusicLibrary{ .targets = targets };
     try library.write_new(
         std.testing.io,
         std.testing.allocator,
