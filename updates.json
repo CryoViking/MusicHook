@@ -1,7 +1,13 @@
 {
   "addons": {
     "@music-hook.automatacrypt": {
-      "updates": []
+      "updates": [
+        {
+          "version": "0.1.0",
+          "update_link": "https://github.com/CryoViking/MusicHook/releases/download/0.1.0/MusicHook-0.1.0.xpi",
+          "update_hash": "sha256:74ddd711c486dade7327ba69a4949e71dd13f410cc4ef82945bcedb81d02a1b9"
+        }
+      ]
     }
   }
 }
