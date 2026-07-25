@@ -65,6 +65,7 @@ tar -czf "$archive_path" \
   --exclude="$repo_name/zig-out" \
   --exclude="$repo_name/out" \
   --exclude="$repo_name/.test-home" \
+  --exclude="$repo_name/scripts/_local" \
   --exclude="$repo_name/.DS_Store" \
   -C "$repo_parent" \
   "$repo_name"
