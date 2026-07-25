@@ -98,7 +98,13 @@ unzip -p "$signed_xpi" manifest.json > "$signed_manifest" ||
 plutil -convert xml1 -o /dev/null "$signed_manifest" ||
   fail "signed XPI manifest is invalid JSON"
 
-cmp -s "$production_manifest" "$signed_manifest" ||
+canonical_production_manifest="$temporary_dir/production-manifest.json"
+canonical_signed_manifest="$temporary_dir/signed-manifest-canonical.json"
+
+plutil -convert json -o "$canonical_production_manifest" "$production_manifest"
+plutil -convert json -o "$canonical_signed_manifest" "$signed_manifest"
+
+cmp -s "$canonical_production_manifest" "$canonical_signed_manifest" ||
   fail "signed XPI manifest does not match the current production manifest"
 
 extension_id=$(plutil -extract browser_specific_settings.gecko.id raw -expect string "$production_manifest")
