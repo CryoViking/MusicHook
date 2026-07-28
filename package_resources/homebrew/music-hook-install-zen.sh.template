@@ -40,7 +40,7 @@ done
 
 if [ -z "$manifest_dir" ]; then
   user_home=${HOME:?HOME must be set}
-  manifest_dir="$user_home/Library/Application Support/zen/NativeMessagingHosts"
+  manifest_dir="$user_home/Library/Application Support/Mozilla/NativeMessagingHosts"
 fi
 
 case "$manifest_dir" in

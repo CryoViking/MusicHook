@@ -86,7 +86,7 @@ music-hook-install-zen
 This writes a per-user Zen native-messaging manifest at:
 
 ```text
-~/Library/Application Support/zen/NativeMessagingHosts/music_hook_host.json
+~/Library/Application Support/Mozilla/NativeMessagingHosts/music_hook_host.json
 ```
 
 It authorizes only the production MusicHook extension. The manifest points at

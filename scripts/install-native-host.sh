@@ -40,7 +40,7 @@ if [ -z "$manifest_dir" ]; then
 
   case "$(uname -s)" in
   Darwin)
-    manifest_dir="$user_home/Library/Application Support/zen/NativeMessagingHosts"
+    manifest_dir="$user_home/Library/Application Support/Mozilla/NativeMessagingHosts"
     ;;
   Linux)
     manifest_dir="$user_home/.mozilla/native-messaging-hosts"

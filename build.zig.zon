@@ -1,6 +1,6 @@
 .{
     .name = .MusicHook,
-    .version = "0.1.1",
+    .version = "0.1.2",
     .minimum_zig_version = "0.16.0",
     .paths = .{""},
     .fingerprint = 0x24a3c5c4582d045b,

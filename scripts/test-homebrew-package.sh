@@ -94,9 +94,17 @@ mkdir -p "$formula_dir"
 
 sh "$repo_dir/scripts/package-source-release.sh"
 
-source_archive=$(find "$repo_dir/out/release" -maxdepth 1 -name 'MusicHook-*.tar.gz' -print -quit)
-[ -n "$source_archive" ] ||
-  fail "source-release script did not create an archive"
+version=$(awk -F '"' '
+  /^[[:space:]]*\.version[[:space:]]*=/ { print $2; exit }
+' "$repo_dir/build.zig.zon")
+
+[ -n "$version" ] ||
+  fail "could not read the package version from build.zig.zon"
+
+source_archive="$repo_dir/out/release/MusicHook-$version.tar.gz"
+
+[ -f "$source_archive" ] ||
+  fail "source-release script did not create the expected archive: $source_archive"
 
 source_sha256=$(shasum -a 256 "$source_archive" | awk '{ print $1 }')
 
@@ -135,10 +143,11 @@ zen_uninstaller="$formula_prefix/bin/music-hook-uninstall-zen"
 [ -x "$zen_uninstaller" ] ||
   fail "Homebrew did not install the Zen uninstaller command"
 
-manifest_dir="$repo_dir/out/homebrew-test/NativeMessagingHosts"
+test_home="$repo_dir/out/homebrew-test/home"
+manifest_dir="$test_home/Library/Application Support/Mozilla/NativeMessagingHosts"
 manifest_path="$manifest_dir/music_hook_host.json"
 
-"$zen_installer" --manifest-dir "$manifest_dir"
+HOME="$test_home" "$zen_installer"
 
 [ -f "$manifest_path" ] ||
   fail "Zen installer did not create a native-host manifest"
@@ -152,7 +161,7 @@ grep -F -q -- "@music-hook.automatacrypt" "$manifest_path" ||
 grep -F -q -- "$host_binary" "$manifest_path" ||
   fail "generated native-host manifest does not point at the installed host"
 
-"$zen_uninstaller" --manifest-dir "$manifest_dir"
+HOME="$test_home" "$zen_uninstaller"
 
 [ ! -e "$manifest_path" ] && [ ! -L "$manifest_path" ] ||
   fail "Zen uninstaller did not remove the native-host manifest"

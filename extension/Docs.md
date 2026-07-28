@@ -70,11 +70,12 @@ Zen launches `music-hook-host` from a separate, machine-local manifest.
 The macOS per-user location used by MusicHook's Zen installers is:
 
 ```text
-~/Library/Application Support/zen/NativeMessagingHosts/music_hook_host.json
+~/Library/Application Support/Mozilla/NativeMessagingHosts/music_hook_host.json
 ```
 
-This is Zen-specific. Firefox uses its own `Mozilla/NativeMessagingHosts`
-directory; MusicHook's current installers deliberately target Zen.
+Zen reads native-host registrations from Firefox's standard macOS
+`Mozilla/NativeMessagingHosts` directory. MusicHook's Zen installer therefore
+registers the host there.
 
 Its relevant form is:
 
