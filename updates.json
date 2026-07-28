@@ -3,9 +3,9 @@
     "@music-hook.automatacrypt": {
       "updates": [
         {
-          "version": "0.1.1",
-          "update_link": "https://github.com/CryoViking/MusicHook/releases/download/0.1.1/MusicHook-0.1.1.xpi",
-          "update_hash": "sha256:27f32356f4c30f78b28b4c461122e240f09db8332dc36b316c9cd2667177a52f"
+          "version": "0.1.2",
+          "update_link": "https://github.com/CryoViking/MusicHook/releases/download/0.1.2/MusicHook-0.1.2.xpi",
+          "update_hash": "sha256:13f54f8b824b9827e44a3e18d399e52e515b53e7b3cb2f50d0ac9be840c47e00"
         }
       ]
     }
