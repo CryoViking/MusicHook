@@ -4,6 +4,7 @@ const native_message = bridge_module.frame;
 const extension_protocol = bridge_module.protocol;
 const utils_module = @import("utils_module");
 const utils = utils_module.utils;
+const runtime_env = utils_module.runtime_env;
 
 pub fn main(init: std.process.Init) !u8 {
     const allocator = init.gpa;
@@ -14,10 +15,16 @@ pub fn main(init: std.process.Init) !u8 {
     var native_reader = std.Io.File.stdin().reader(io, &native_input_buffer);
     var native_writer = std.Io.File.stdout().writer(io, &native_output_buffer);
 
-    const socket_path = try utils.runtime_socket_path(
+    const runtime_dir = try runtime_env.resolve_runtime_dir(
         allocator,
         init.environ_map.get("XDG_RUNTIME_DIR"),
         init.environ_map.get("TMPDIR"),
+    );
+    defer allocator.free(runtime_dir);
+
+    const socket_path = try utils.runtime_socket_path(
+        allocator,
+        runtime_dir,
     );
     defer allocator.free(socket_path);
 
@@ -114,46 +121,22 @@ fn relay_one(
 
 // SECTION: tests
 
-test "runtime socket path prefers XDG_RUNTIME_DIR" {
+test "runtime socket path joins an absolute runtime directory" {
     const path = try utils.runtime_socket_path(
         std.testing.allocator,
         "/run/user/1000",
-        "/tmp/user",
     );
     defer std.testing.allocator.free(path);
 
     try std.testing.expectEqualStrings("/run/user/1000/music_hook/host.sock", path);
 }
 
-test "runtime socket path falls back to TMPDIR" {
-    const path = try utils.runtime_socket_path(
-        std.testing.allocator,
-        null,
-        "/tmp/user",
-    );
-    defer std.testing.allocator.free(path);
-
-    try std.testing.expectEqualStrings("/tmp/user/music_hook/host.sock", path);
-}
-
-test "runtime socket path ignores a relative XDG_RUNTIME_DIR" {
-    const path = try utils.runtime_socket_path(
-        std.testing.allocator,
-        "relative/runtime",
-        "/tmp/user",
-    );
-    defer std.testing.allocator.free(path);
-
-    try std.testing.expectEqualStrings("/tmp/user/music_hook/host.sock", path);
-}
-
-test "runtime socket path rejects missing runtime directories" {
+test "runtime socket path rejects a relative runtime directory" {
     try std.testing.expectError(
-        error.MissingRuntimeDirectory,
+        error.RelativeRuntimeDirectory,
         utils.runtime_socket_path(
             std.testing.allocator,
-            null,
-            null,
+            "relative/runtime",
         ),
     );
 }
@@ -260,7 +243,6 @@ test "removes a stale Unix socket before listening" {
 
     const socket_path = try utils.runtime_socket_path(
         std.testing.allocator,
-        null,
         runtime_dir_buffer[0..runtime_dir_length],
     );
     defer std.testing.allocator.free(socket_path);

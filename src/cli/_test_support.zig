@@ -48,7 +48,6 @@ pub const FakeHost = struct {
 
         const socket_path = try utils.runtime_socket_path(
             std.testing.allocator,
-            null,
             runtime_dir,
         );
         errdefer std.testing.allocator.free(socket_path);

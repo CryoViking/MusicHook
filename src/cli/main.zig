@@ -18,6 +18,7 @@ const music_library = library_module.music_library;
 const config = library_module.config;
 const target = library_module.target;
 const utils = utils_module.utils;
+const runtime_env = utils_module.runtime_env;
 
 const DEFAULT_LIST_WIDTH = 100;
 const LIST_GAP_WIDTH = 2;
@@ -94,8 +95,7 @@ const ExecutionContext = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
     config_filepath: []const u8,
-    xdg_runtime_dir: ?[]const u8,
-    temp_dir: ?[]const u8,
+    runtime_dir: []const u8 = "/tmp/music_hook_test",
 };
 
 pub fn main(init: std.process.Init) !u8 {
@@ -117,12 +117,18 @@ pub fn main(init: std.process.Init) !u8 {
         const path = try config_path(allocator, home);
         defer allocator.free(path);
 
+        const runtime_dir = try runtime_env.resolve_runtime_dir(
+            allocator,
+            init.environ_map.get("XDG_RUNTIME_DIR"),
+            init.environ_map.get("TMPDIR"),
+        );
+        defer allocator.free(runtime_dir);
+
         const context = ExecutionContext{
             .io = init.io,
             .allocator = init.gpa,
             .config_filepath = path,
-            .xdg_runtime_dir = init.environ_map.get("XDG_RUNTIME_DIR"),
-            .temp_dir = init.environ_map.get("TMPDIR"),
+            .runtime_dir = runtime_dir,
         };
 
         execute(context, request) catch |err| switch (err) {
@@ -298,8 +304,7 @@ fn inspect_native_bridge(context: ExecutionContext, report: *DoctorReport) void 
     var client = host_client.HostClient.connect(
         context.io,
         context.allocator,
-        context.xdg_runtime_dir,
-        context.temp_dir,
+        context.runtime_dir,
     ) catch |err| {
         report.native_bridge = .{ .failed = err };
         return;
@@ -470,8 +475,7 @@ fn execute_playback_command(
     var client = try host_client.HostClient.connect(
         context.io,
         context.allocator,
-        context.xdg_runtime_dir,
-        context.temp_dir,
+        context.runtime_dir,
     );
     defer client.deinit();
 
@@ -494,8 +498,7 @@ fn execute_play_direct_url(context: ExecutionContext, url: []const u8) !void {
     var client = try host_client.HostClient.connect(
         context.io,
         context.allocator,
-        context.xdg_runtime_dir,
-        context.temp_dir,
+        context.runtime_dir,
     );
     defer client.deinit();
 
@@ -976,8 +979,7 @@ test "direct URL play succeeds when the host returns ok" {
         .io = std.testing.io,
         .allocator = std.testing.allocator,
         .config_filepath = "",
-        .xdg_runtime_dir = null,
-        .temp_dir = fake_host.runtime_dir,
+        .runtime_dir = fake_host.runtime_dir,
     };
 
     try execute_play_direct_url(context, expected_url);
@@ -999,8 +1001,7 @@ test "direct URL play maps zen_unavailable to a CLI error" {
         .io = std.testing.io,
         .allocator = std.testing.allocator,
         .config_filepath = "",
-        .xdg_runtime_dir = null,
-        .temp_dir = fake_host.runtime_dir,
+        .runtime_dir = fake_host.runtime_dir,
     };
 
     try std.testing.expectError(
@@ -1025,8 +1026,7 @@ test "direct URL play maps extension_unavailable to a CLI error" {
         .io = std.testing.io,
         .allocator = std.testing.allocator,
         .config_filepath = "",
-        .xdg_runtime_dir = null,
-        .temp_dir = fake_host.runtime_dir,
+        .runtime_dir = fake_host.runtime_dir,
     };
 
     try std.testing.expectError(
@@ -1051,8 +1051,7 @@ test "direct URL play maps playback_failed to a CLI error" {
         .io = std.testing.io,
         .allocator = std.testing.allocator,
         .config_filepath = "",
-        .xdg_runtime_dir = null,
-        .temp_dir = fake_host.runtime_dir,
+        .runtime_dir = fake_host.runtime_dir,
     };
 
     try std.testing.expectError(
@@ -1074,8 +1073,7 @@ test "pause succeeds when the host returns ok" {
         .io = std.testing.io,
         .allocator = std.testing.allocator,
         .config_filepath = "",
-        .xdg_runtime_dir = null,
-        .temp_dir = fake_host.runtime_dir,
+        .runtime_dir = fake_host.runtime_dir,
     };
 
     try execute_playback_command(context, .pause);
@@ -1094,8 +1092,7 @@ test "resume succeeds when the host returns ok" {
         .io = std.testing.io,
         .allocator = std.testing.allocator,
         .config_filepath = "",
-        .xdg_runtime_dir = null,
-        .temp_dir = fake_host.runtime_dir,
+        .runtime_dir = fake_host.runtime_dir,
     };
 
     try execute_playback_command(context, .@"resume");
@@ -1114,8 +1111,7 @@ test "pause maps playback_failed to a CLI error" {
         .io = std.testing.io,
         .allocator = std.testing.allocator,
         .config_filepath = "",
-        .xdg_runtime_dir = null,
-        .temp_dir = fake_host.runtime_dir,
+        .runtime_dir = fake_host.runtime_dir,
     };
 
     try std.testing.expectError(
@@ -1182,8 +1178,6 @@ test "add rejects an existing alias before resolving its URL" {
         .io = std.testing.io,
         .allocator = std.testing.allocator,
         .config_filepath = config_filepath,
-        .xdg_runtime_dir = null,
-        .temp_dir = null,
     };
 
     try std.testing.expectError(
@@ -1249,8 +1243,6 @@ test "remove deletes an existing alias" {
         .io = std.testing.io,
         .allocator = std.testing.allocator,
         .config_filepath = config_filepath,
-        .xdg_runtime_dir = null,
-        .temp_dir = null,
     };
 
     try std.testing.expectEqual(
@@ -1317,8 +1309,6 @@ test "remove leaves the library unchanged for a missing alias" {
         .io = std.testing.io,
         .allocator = std.testing.allocator,
         .config_filepath = config_filepath,
-        .xdg_runtime_dir = null,
-        .temp_dir = null,
     };
 
     try std.testing.expectEqual(
@@ -1367,8 +1357,7 @@ test "play alias sends its stored URL to the host" {
         .io = std.testing.io,
         .allocator = std.testing.allocator,
         .config_filepath = "",
-        .xdg_runtime_dir = null,
-        .temp_dir = fake_host.runtime_dir,
+        .runtime_dir = fake_host.runtime_dir,
     };
 
     try std.testing.expectEqual(
@@ -1388,8 +1377,6 @@ test "play alias returns not found for a missing alias" {
         .io = std.testing.io,
         .allocator = std.testing.allocator,
         .config_filepath = "",
-        .xdg_runtime_dir = null,
-        .temp_dir = null,
     };
 
     try std.testing.expectEqual(
@@ -1431,8 +1418,6 @@ test "list renders playlists and tracks in separate sections" {
         .io = std.testing.io,
         .allocator = std.testing.allocator,
         .config_filepath = config_filepath,
-        .xdg_runtime_dir = null,
-        .temp_dir = null,
     };
 
     var output = std.Io.Writer.Allocating.init(std.testing.allocator);
@@ -1482,8 +1467,6 @@ test "list prints empty playlist and track sections" {
         .io = std.testing.io,
         .allocator = std.testing.allocator,
         .config_filepath = config_filepath,
-        .xdg_runtime_dir = null,
-        .temp_dir = null,
     };
 
     var output = std.Io.Writer.Allocating.init(std.testing.allocator);
@@ -1517,8 +1500,6 @@ test "doctor skips dependent checks when config is missing" {
         .io = std.testing.io,
         .allocator = std.testing.allocator,
         .config_filepath = config_filepath,
-        .xdg_runtime_dir = null,
-        .temp_dir = null,
     }, &report);
 
     try std.testing.expectEqual(.failed, std.meta.activeTag(report.config));
@@ -1554,8 +1535,6 @@ test "doctor reports a missing configured data directory" {
         .io = std.testing.io,
         .allocator = std.testing.allocator,
         .config_filepath = config_filepath,
-        .xdg_runtime_dir = null,
-        .temp_dir = null,
     }, &report);
 
     try std.testing.expectEqual(.ok, std.meta.activeTag(report.config));
@@ -1588,8 +1567,6 @@ test "doctor reports a missing library file" {
         .io = std.testing.io,
         .allocator = std.testing.allocator,
         .config_filepath = config_filepath,
-        .xdg_runtime_dir = null,
-        .temp_dir = null,
     }, &report);
 
     try std.testing.expectEqual(.ok, std.meta.activeTag(report.config));
@@ -1610,8 +1587,6 @@ test "doctor reports healthy local configuration and library" {
         .io = std.testing.io,
         .allocator = std.testing.allocator,
         .config_filepath = config_filepath,
-        .xdg_runtime_dir = null,
-        .temp_dir = null,
     }, &report);
 
     try std.testing.expectEqual(.ok, std.meta.activeTag(report.config));
@@ -1688,8 +1663,7 @@ test "doctor reports a healthy native bridge" {
             .io = std.testing.io,
             .allocator = std.testing.allocator,
             .config_filepath = config_filepath,
-            .xdg_runtime_dir = null,
-            .temp_dir = fake_host.runtime_dir,
+            .runtime_dir = fake_host.runtime_dir,
         },
         &output.writer,
     );
@@ -1729,8 +1703,7 @@ test "doctor reports a failed native bridge" {
             .io = std.testing.io,
             .allocator = std.testing.allocator,
             .config_filepath = config_filepath,
-            .xdg_runtime_dir = null,
-            .temp_dir = fake_host.runtime_dir,
+            .runtime_dir = fake_host.runtime_dir,
         },
         &output.writer,
     );

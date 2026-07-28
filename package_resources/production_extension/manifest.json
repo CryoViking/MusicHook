@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "MusicHook",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Local CLI bridge for starting focused music in Zen.",
   "browser_specific_settings": {
     "gecko": {

@@ -13,13 +13,11 @@ pub const HostClient = struct {
     pub fn connect(
         io: std.Io,
         allocator: std.mem.Allocator,
-        xdg_runtime_dir: ?[]const u8,
-        temp_dir: ?[]const u8,
+        runtime_dir: []const u8,
     ) !HostClient {
         const socket_path = try utils.runtime_socket_path(
             allocator,
-            xdg_runtime_dir,
-            temp_dir,
+            runtime_dir,
         );
         defer allocator.free(socket_path);
 
@@ -87,7 +85,6 @@ test "HostClient sends a play request over a Unix socket and receives a response
     var client = try HostClient.connect(
         std.testing.io,
         std.testing.allocator,
-        null,
         fake_host.runtime_dir,
     );
     defer client.deinit();
@@ -115,7 +112,6 @@ test "HostClient returns a failed response from the host" {
     var client = try HostClient.connect(
         std.testing.io,
         std.testing.allocator,
-        null,
         fake_host.runtime_dir,
     );
     defer client.deinit();
@@ -143,7 +139,6 @@ test "HostClient rejects a failed response without an error code" {
     var client = try HostClient.connect(
         std.testing.io,
         std.testing.allocator,
-        null,
         fake_host.runtime_dir,
     );
     defer client.deinit();
@@ -171,7 +166,6 @@ test "HostClient rejects invalid JSON from the host" {
     var client = try HostClient.connect(
         std.testing.io,
         std.testing.allocator,
-        null,
         fake_host.runtime_dir,
     );
     defer client.deinit();
@@ -196,7 +190,6 @@ test "HostClient sends a ping request over a Unix socket and receives a response
     var client = try HostClient.connect(
         std.testing.io,
         std.testing.allocator,
-        null,
         fake_host.runtime_dir,
     );
     defer client.deinit();
